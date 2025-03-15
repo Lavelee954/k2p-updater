@@ -5,6 +5,74 @@ import (
 	"fmt"
 )
 
+// Common error types
+var (
+	// ErrNotFound indicates a resource was not found
+	ErrNotFound = errors.New("resource not found")
+
+	// ErrInvalidInput indicates invalid input parameters
+	ErrInvalidInput = errors.New("invalid input parameter")
+
+	// ErrTimeout indicates an operation timed out
+	ErrTimeout = errors.New("operation timed out")
+
+	// ErrNotInitialized indicates a component is not initialized
+	ErrNotInitialized = errors.New("component not initialized")
+
+	// ErrUnavailable indicates a service is unavailable
+	ErrUnavailable = errors.New("service unavailable")
+)
+
+// IsNotFound checks if err is or wraps ErrNotFound
+func IsNotFound(err error) bool {
+	return errors.Is(err, ErrNotFound)
+}
+
+// IsInvalidInput checks if err is or wraps ErrInvalidInput
+func IsInvalidInput(err error) bool {
+	return errors.Is(err, ErrInvalidInput)
+}
+
+// IsTimeout checks if err is or wraps ErrTimeout
+func IsTimeout(err error) bool {
+	return errors.Is(err, ErrTimeout)
+}
+
+// IsNotInitialized checks if err is or wraps ErrNotInitialized
+func IsNotInitialized(err error) bool {
+	return errors.Is(err, ErrNotInitialized)
+}
+
+// IsUnavailable checks if err is or wraps ErrUnavailable
+func IsUnavailable(err error) bool {
+	return errors.Is(err, ErrUnavailable)
+}
+
+// NotFoundError returns a wrapped not found error with context
+func NotFoundError(format string, args ...interface{}) error {
+	return fmt.Errorf("%s: %w", fmt.Sprintf(format, args...), ErrNotFound)
+}
+
+// InvalidInputError returns a wrapped invalid input error with context
+func InvalidInputError(format string, args ...interface{}) error {
+	return fmt.Errorf("%s: %w", fmt.Sprintf(format, args...), ErrInvalidInput)
+}
+
+// TimeoutError returns a wrapped timeout error with context
+func TimeoutError(format string, args ...interface{}) error {
+	return fmt.Errorf("%s: %w", fmt.Sprintf(format, args...), ErrTimeout)
+}
+
+// NotInitializedError returns a wrapped not initialized error with context
+func NotInitializedError(format string, args ...interface{}) error {
+	return fmt.Errorf("%s: %w", fmt.Sprintf(format, args...), ErrNotInitialized)
+}
+
+// UnavailableError returns a wrapped unavailable error with context
+func UnavailableError(format string, args ...interface{}) error {
+	return fmt.Errorf("%s: %w", fmt.Sprintf(format, args...), ErrUnavailable)
+}
+
 // ErrNodeNotFound represents a missing node error
 type ErrNodeNotFound struct {
 	NodeName string

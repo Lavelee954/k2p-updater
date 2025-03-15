@@ -22,65 +22,109 @@ type Service struct {
 	healthCheckChan chan string
 	initialized     chan struct{}
 	startOnce       sync.Once
+	stopChan        chan struct{}
+}
+
+// ServiceOption defines a functional option for Service configuration
+type ServiceOption func(*Service)
+
+// WithPodFetcher provides a custom pod fetcher implementation
+func WithPodFetcher(fetcher domain.PodFetcher) ServiceOption {
+	return func(s *Service) {
+		s.podFetcher = fetcher
+	}
+}
+
+// WithHealthChecker provides a custom health checker implementation
+func WithHealthChecker(checker domain.HealthChecker) ServiceOption {
+	return func(s *Service) {
+		s.healthChecker = checker
+	}
 }
 
 // NewService creates a new exporter service with default dependencies.
-func NewService(client domain.KubernetesClient, config *app.ExporterConfig) *Service {
-	return &Service{
+func NewService(client domain.KubernetesClient, config *app.ExporterConfig, options ...ServiceOption) *Service {
+	if config == nil {
+		log.Println("Warning: nil configuration provided to exporter service")
+		config = &app.ExporterConfig{
+			HealthCheckTimeout: 5 * time.Second,
+		}
+	}
+
+	service := &Service{
 		podFetcher:      newPodFetcher(client),
 		healthChecker:   newHealthChecker(config.HealthCheckTimeout),
 		exporters:       make(map[string]*domain.NodeExporter),
 		config:          config,
 		healthCheckChan: make(chan string, 100),
 		initialized:     make(chan struct{}),
+		stopChan:        make(chan struct{}),
 	}
-}
 
-// NewWithDependencies creates a new exporter service with custom dependencies.
-func NewWithDependencies(
-	podFetcher domain.PodFetcher,
-	healthChecker domain.HealthChecker,
-	config *app.ExporterConfig,
-) *Service {
-	return &Service{
-		podFetcher:      podFetcher,
-		healthChecker:   healthChecker,
-		exporters:       make(map[string]*domain.NodeExporter),
-		config:          config,
-		healthCheckChan: make(chan string, 100),
-		initialized:     make(chan struct{}),
+	// Apply any provided options
+	for _, option := range options {
+		option(service)
 	}
+
+	return service
 }
 
 // Start initializes and starts the exporter service.
 func (s *Service) Start(ctx context.Context) error {
 	var startErr error
 	s.startOnce.Do(func() {
-		exporters, err := s.fetchNodeExporters(ctx)
-		if err != nil {
-			startErr = fmt.Errorf("initial exporter fetch failed: %w", err)
+		// Initialize the exporter list
+		if err := s.initializeExporters(ctx); err != nil {
+			startErr = err
 			return
 		}
 
-		s.mu.Lock()
-		for _, exporter := range exporters {
-			s.exporters[exporter.NodeName] = &domain.NodeExporter{
-				Name:     exporter.Name,
-				IP:       exporter.IP,
-				NodeName: exporter.NodeName,
-				LastSeen: time.Now(),
-				Status:   domain.StatusRunning,
-			}
-		}
-		s.mu.Unlock()
-
-		close(s.initialized)
-
+		// Start background goroutines
 		go s.runHealthCheck(ctx)
 		go s.processHealthChecks(ctx)
 	})
 
 	return startErr
+}
+
+// initializeExporters fetches and sets up the initial exporter list
+func (s *Service) initializeExporters(ctx context.Context) error {
+	// Fetch exporters with timeout
+	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	exporters, err := s.fetchNodeExporters(fetchCtx)
+	if err != nil {
+		return fmt.Errorf("initial exporter fetch failed: %w", err)
+	}
+
+	// Store exporters in the map
+	s.mu.Lock()
+	for _, exporter := range exporters {
+		s.exporters[exporter.NodeName] = &domain.NodeExporter{
+			Name:     exporter.Name,
+			IP:       exporter.IP,
+			NodeName: exporter.NodeName,
+			LastSeen: time.Now(),
+			Status:   domain.StatusRunning,
+		}
+	}
+	s.mu.Unlock()
+
+	// Signal initialization completion
+	close(s.initialized)
+	return nil
+}
+
+// Stop gracefully shuts down the service
+func (s *Service) Stop() {
+	select {
+	case <-s.stopChan:
+		// Already closed
+		return
+	default:
+		close(s.stopChan)
+	}
 }
 
 // GetExporter returns an exporter for the specified node if it exists.

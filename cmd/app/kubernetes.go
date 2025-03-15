@@ -37,9 +37,13 @@ type KubeClients struct {
 // NewKubeClients returns configured Kubernetes clients.
 // It first tries to use a kubeconfig file, then falls back to in-cluster configuration.
 func NewKubeClients(cfg *KubernetesConfig) (*KubeClients, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("kubernetes configuration cannot be nil")
+	}
+
 	config, err := getKubeConfig(cfg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to get kubernetes configuration: %w", err)
 	}
 
 	// Create clientset
@@ -64,6 +68,10 @@ func NewKubeClients(cfg *KubernetesConfig) (*KubeClients, error) {
 
 // getKubeConfig returns the kubernetes REST configuration
 func getKubeConfig(cfg *KubernetesConfig) (*rest.Config, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("kubernetes configuration cannot be nil")
+	}
+
 	// Determine kubeconfig file location
 	kubeconfig := determineKubeconfigPath(cfg.ConfigPath)
 
@@ -106,10 +114,15 @@ func determineKubeconfigPath(configPath string) string {
 
 // shouldUseInClusterConfig determines if in-cluster config should be used
 func shouldUseInClusterConfig(kubeconfig string) bool {
+	// If kubeconfig is empty, try to use in-cluster config
 	if kubeconfig == "" {
 		return true
 	}
 
-	_, err := os.Stat(kubeconfig)
-	return err != nil
+	// Check if kubeconfig file exists
+	if _, err := os.Stat(kubeconfig); os.IsNotExist(err) {
+		return true
+	}
+
+	return false
 }

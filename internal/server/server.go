@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"k2p-updater/cmd/app"
@@ -17,8 +18,170 @@ import (
 	"time"
 )
 
-// Run starts the application
-func Run() {
+// Server encapsulates the application server functionality
+type Server struct {
+	cfg             *app.Config
+	kubeClients     *app.KubeClients
+	exporterSvc     domain.Provider
+	metricsSvc      interface{}
+	resourceFactory *resource.Factory
+	httpServer      *http.Server
+}
+
+// NewServer creates a new server instance
+func NewServer(ctx context.Context) (*Server, error) {
+	// 1. Load configuration
+	cfg, err := app.Load()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load configuration: %w", err)
+	}
+
+	// 2. Create Kubernetes clients
+	kubeClients, err := app.NewKubeClients(&cfg.Kubernetes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Kubernetes clients: %w", err)
+	}
+
+	return &Server{
+		cfg:         cfg,
+		kubeClients: kubeClients,
+	}, nil
+}
+
+// Initialize sets up all required services
+func (s *Server) Initialize(ctx context.Context) error {
+	// Create a context with timeout for initialization
+	initCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	// 1. Initialize exporter service
+	log.Println("Initializing exporter service...")
+	exporterCtx, exporterCancel := context.WithTimeout(initCtx, 30*time.Second)
+	defer exporterCancel()
+
+	exporterProvider, err := exporter.NewProvider(exporterCtx, &s.cfg.Exporter, s.kubeClients.ClientSet)
+	if err != nil {
+		return fmt.Errorf("failed to initialize exporter service: %w", err)
+	}
+	log.Println("Exporter service initialized successfully")
+	s.exporterSvc = exporterProvider
+
+	// 2. Initialize metrics service - Use FullClientSet instead of ClientSet
+	log.Println("Initializing metrics service...")
+	metricsCtx, metricsCancel := context.WithTimeout(initCtx, 30*time.Second)
+	defer metricsCancel()
+
+	metricsProvider, err := metric.NewProvider(metricsCtx, &s.cfg.Metrics, s.kubeClients.FullClientSet, exporterProvider)
+	if err != nil {
+		return fmt.Errorf("failed to initialize metrics service: %w", err)
+	}
+	log.Println("Metrics service initialized successfully")
+	s.metricsSvc = metricsProvider
+
+	// 3. Convert resource definitions for the factory
+	resourceDefs := convertResourceDefinitions(s.cfg.Resources.Definitions)
+
+	// 4. Create resource factory
+	factory, err := resource.NewFactory(
+		s.cfg.Resources.Namespace,
+		s.cfg.Resources.Group,
+		s.cfg.Resources.Version,
+		resourceDefs,
+		s.kubeClients.DynamicClient,
+		s.kubeClients.ClientSet,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create resource factory: %w", err)
+	}
+	s.resourceFactory = factory
+
+	// 5. Setup HTTP server
+	s.httpServer = &http.Server{
+		Addr:         s.cfg.Server.Port,
+		Handler:      setupRoutes(s.exporterSvc, s.metricsSvc),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+
+	return nil
+}
+
+// Start begins the server operation and handles graceful shutdown
+func (s *Server) Start(ctx context.Context) error {
+	// 1. Record initialization event
+	statusMsg := fmt.Sprintf(
+		"Service initialized. Scale threshold: %.1f%%, Window size: %.1f minutes",
+		s.cfg.Metrics.ScaleTrigger,
+		s.cfg.Metrics.WindowSize.Minutes(),
+	)
+	if err := s.resourceFactory.Event().NormalRecord(ctx, "updater", "ServiceStart", statusMsg); err != nil {
+		log.Printf("Warning: Failed to record initialization event: %v", err)
+	}
+
+	// 2. Update initial status
+	statusData := map[string]interface{}{
+		"lastUpdateTime": time.Now().Format(time.RFC3339),
+		"status":         "Running",
+		"message":        "Service initialized successfully",
+	}
+
+	if err := s.resourceFactory.Status().UpdateGeneric(ctx, "updater", statusData); err != nil {
+		log.Printf("Warning: Failed to update initial status: %v", err)
+	}
+
+	// 3. Start HTTP server in background
+	serverErrCh := make(chan error, 1)
+	go func() {
+		log.Printf("Starting HTTP server on %s", s.cfg.Server.Port)
+		if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serverErrCh <- fmt.Errorf("HTTP server error: %w", err)
+		}
+	}()
+
+	// 4. Wait for either server error or context cancellation
+	select {
+	case err := <-serverErrCh:
+		return err
+	case <-ctx.Done():
+		log.Println("Shutdown initiated, gracefully stopping services...")
+	}
+
+	return nil
+}
+
+// Shutdown performs graceful shutdown of the server
+func (s *Server) Shutdown() error {
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), s.cfg.Server.ShutdownTimeout)
+	defer shutdownCancel()
+
+	// Update final status before shutdown
+	finalStatusData := map[string]interface{}{
+		"lastUpdateTime": time.Now().Format(time.RFC3339),
+		"status":         "Shutdown",
+		"message":        "Service shutting down gracefully",
+	}
+
+	if err := s.resourceFactory.Status().UpdateGeneric(shutdownCtx, "updater", finalStatusData); err != nil {
+		log.Printf("Warning: Failed to update final status: %v", err)
+	}
+
+	// Record shutdown event
+	if err := s.resourceFactory.Event().NormalRecord(shutdownCtx, "updater", "ServiceStop", "Service shutting down"); err != nil {
+		log.Printf("Warning: Failed to record shutdown event: %v", err)
+	}
+
+	// Shutdown HTTP server
+	if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
+		return fmt.Errorf("HTTP server shutdown error: %w", err)
+	}
+
+	log.Println("Application shutdown complete")
+	return nil
+}
+
+// Run starts the application and returns an exit code
+func Run() int {
 	// Create context with cancellation for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -34,117 +197,32 @@ func Run() {
 		cancel()
 	}()
 
-	// 1. Load configuration
-	cfg, err := app.Load()
+	// Initialize the server
+	server, err := NewServer(ctx)
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		log.Printf("Failed to create server: %v", err)
+		return 1
 	}
 
-	// 2. Create Kubernetes clients
-	kcfg, err := app.NewKubeClients(&cfg.Kubernetes)
-	if err != nil {
-		log.Fatalf("Failed to create Kubernetes clients: %v", err)
+	// Initialize services
+	if err := server.Initialize(ctx); err != nil {
+		log.Printf("Failed to initialize server: %v", err)
+		return 1
 	}
 
-	// 3. Initialize exporter service
-	log.Println("Initializing exporter service...")
-	exporterProvider, err := exporter.NewProvider(ctx, &cfg.Exporter, kcfg.ClientSet)
-	if err != nil {
-		log.Fatalf("Failed to initialize exporter service: %v", err)
-	}
-	log.Println("Exporter service initialized successfully")
-
-	// 4. Initialize metrics service - Use FullClientSet instead of ClientSet
-	log.Println("Initializing metrics service...")
-	metricsProvider, err := metric.NewProvider(ctx, &cfg.Metrics, kcfg.FullClientSet, exporterProvider)
-	if err != nil {
-		log.Fatalf("Failed to initialize metrics service: %v", err)
-	}
-	log.Println("Metrics service initialized successfully")
-
-	// 5. Convert resource definitions for the factory
-	resourceDefs := convertResourceDefinitions(cfg.Resources.Definitions)
-
-	// 6. Create resource factory
-	factory, err := resource.NewFactory(
-		cfg.Resources.Namespace,
-		cfg.Resources.Group,
-		cfg.Resources.Version,
-		resourceDefs,
-		kcfg.DynamicClient,
-		kcfg.ClientSet,
-	)
-	if err != nil {
-		log.Fatalf("Failed to create resource factory: %v", err)
+	// Start the server
+	if err := server.Start(ctx); err != nil {
+		log.Printf("Server error: %v", err)
+		return 1
 	}
 
-	// 7. Record initialization event
-	statusMsg := fmt.Sprintf(
-		"Service initialized. Scale threshold: %.1f%%, Window size: %.1f minutes",
-		cfg.Metrics.ScaleTrigger,
-		cfg.Metrics.WindowSize.Minutes(),
-	)
-	err = factory.Event().NormalRecord(ctx, "updater", "ServiceStart", statusMsg)
-	if err != nil {
-		log.Printf("Warning: Failed to record initialization event: %v", err)
+	// Shutdown gracefully
+	if err := server.Shutdown(); err != nil {
+		log.Printf("Error during shutdown: %v", err)
+		return 1
 	}
 
-	// 8. Update initial status
-	statusData := map[string]interface{}{
-		"lastUpdateTime": time.Now().Format(time.RFC3339),
-		"status":         "Running",
-		"message":        "Service initialized successfully",
-	}
-
-	err = factory.Status().UpdateGeneric(ctx, "updater", statusData)
-	if err != nil {
-		log.Printf("Warning: Failed to update initial status: %v", err)
-	}
-
-	// 9. Setup HTTP server
-	server := &http.Server{
-		Addr:    cfg.Server.Port,
-		Handler: setupRoutes(exporterProvider, metricsProvider),
-	}
-
-	// 10. Start HTTP server in background
-	go func() {
-		log.Printf("Starting HTTP server on %s", cfg.Server.Port)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("HTTP server error: %v", err)
-		}
-	}()
-
-	// 11. Wait for context cancellation (shutdown signal)
-	<-ctx.Done()
-	log.Println("Shutdown initiated, gracefully stopping services...")
-
-	// 12. Graceful shutdown
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
-	defer shutdownCancel()
-
-	// Update final status before shutdown
-	finalStatusData := map[string]interface{}{
-		"lastUpdateTime": time.Now().Format(time.RFC3339),
-		"status":         "Shutdown",
-		"message":        "Service shutting down gracefully",
-	}
-
-	if err := factory.Status().UpdateGeneric(shutdownCtx, "updater", finalStatusData); err != nil {
-		log.Printf("Warning: Failed to update final status: %v", err)
-	}
-
-	// Record shutdown event
-	if err := factory.Event().NormalRecord(shutdownCtx, "updater", "ServiceStop", "Service shutting down"); err != nil {
-		log.Printf("Warning: Failed to record shutdown event: %v", err)
-	}
-
-	// Shutdown HTTP server
-	if err := server.Shutdown(shutdownCtx); err != nil {
-		log.Printf("HTTP server shutdown error: %v", err)
-	}
-
-	log.Println("Application shutdown complete")
+	return 0
 }
 
 // convertResourceDefinitions converts app-specific configuration to resource package format
@@ -167,45 +245,62 @@ func convertResourceDefinitions(appDefs map[string]app.ResourceDefinitionConfig)
 // setupRoutes configures the HTTP routes for the application
 func setupRoutes(exporterProvider domain.Provider, metricsProvider interface{}) http.Handler {
 	mux := http.NewServeMux()
+	handler := &HTTPHandler{
+		exporterProvider: exporterProvider,
+		metricsProvider:  metricsProvider,
+	}
 
 	// Health check endpoint
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
-	})
+	mux.HandleFunc("/health", handler.HealthHandler)
 
 	// Status endpoint - shows exporters info
-	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
-		exporters := exporterProvider.GetHealthyExporters()
-		w.Header().Set("Content-Type", "application/json")
-
-		fmt.Fprintf(w, "{\n  \"status\": \"running\",\n  \"healthy_exporters\": %d,\n", len(exporters))
-
-		// Add exporters info
-		fmt.Fprintf(w, "  \"exporters\": [\n")
-		for i, exporter := range exporters {
-			fmt.Fprintf(w, "    {\n")
-			fmt.Fprintf(w, "      \"name\": \"%s\",\n", exporter.Name)
-			fmt.Fprintf(w, "      \"node\": \"%s\",\n", exporter.NodeName)
-			fmt.Fprintf(w, "      \"ip\": \"%s\",\n", exporter.IP)
-			fmt.Fprintf(w, "      \"status\": \"%s\",\n", exporter.Status)
-			fmt.Fprintf(w, "      \"last_seen\": \"%s\"\n", exporter.LastSeen.Format(time.RFC3339))
-
-			if i < len(exporters)-1 {
-				fmt.Fprintf(w, "    },\n")
-			} else {
-				fmt.Fprintf(w, "    }\n")
-			}
-		}
-		fmt.Fprintf(w, "  ]\n}")
-	})
+	mux.HandleFunc("/status", handler.StatusHandler)
 
 	// Metrics endpoint
-	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("# Metrics endpoint - Prometheus format metrics would be here\n"))
-	})
+	mux.HandleFunc("/metrics", handler.MetricsHandler)
 
 	return mux
+}
+
+// HTTPHandler encapsulates the HTTP handlers
+type HTTPHandler struct {
+	exporterProvider domain.Provider
+	metricsProvider  interface{}
+}
+
+// HealthHandler handles health check requests
+func (h *HTTPHandler) HealthHandler(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("OK"))
+}
+
+// StatusHandler handles status check requests
+func (h *HTTPHandler) StatusHandler(w http.ResponseWriter, r *http.Request) {
+	exporters := h.exporterProvider.GetHealthyExporters()
+	w.Header().Set("Content-Type", "application/json")
+
+	// Create a proper response structure
+	response := struct {
+		Status           string                `json:"status"`
+		HealthyExporters int                   `json:"healthy_exporters"`
+		Exporters        []domain.NodeExporter `json:"exporters"`
+	}{
+		Status:           "running",
+		HealthyExporters: len(exporters),
+		Exporters:        exporters,
+	}
+
+	// Use proper JSON encoding
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding status response: %v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+}
+
+// MetricsHandler handles metrics requests
+func (h *HTTPHandler) MetricsHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("# Metrics endpoint - Prometheus format metrics would be here\n"))
 }

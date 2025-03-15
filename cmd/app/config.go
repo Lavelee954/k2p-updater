@@ -312,6 +312,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("updater.scale_threshold", 50.0)
 	v.SetDefault("updater.scale_up_step", 1)
 	v.SetDefault("updater.cooldown_period", 5*time.Minute)
+	v.SetDefault("updater.namespace", "ks-operator")
 
 	// Exporter defaults
 	v.SetDefault("exporter.namespace", "monitoring")

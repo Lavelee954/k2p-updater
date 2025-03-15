@@ -66,4 +66,7 @@ type UpdaterConfig struct {
 
 	// CooldownUpdateInterval is how often to update cooldown status
 	CooldownUpdateInterval time.Duration
+
+	// Namespace is the Kubernetes namespace to operate in
+	Namespace string
 }

@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	updaterDomain "k2p-updater/internal/features/updater/domian"
+	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
 )
 
@@ -12,21 +12,21 @@ type monitoringHandler struct {
 }
 
 // newMonitoringHandler creates a new handler for Monitoring state
-func newMonitoringHandler(resourceFactory *resource.Factory) updaterDomain.StateHandler {
+func newMonitoringHandler(resourceFactory *resource.Factory) domain.StateHandler {
 	return &monitoringHandler{
 		resourceFactory: resourceFactory,
 	}
 }
 
 // Handle processes events for the Monitoring state
-func (h *monitoringHandler) Handle(ctx context.Context, status *updaterDomain.ControlPlaneStatus, event updaterDomain.Event, data map[string]interface{}) (*updaterDomain.ControlPlaneStatus, error) {
+func (h *monitoringHandler) Handle(ctx context.Context, status *domain.ControlPlaneStatus, event domain.Event, data map[string]interface{}) (*domain.ControlPlaneStatus, error) {
 	// Create a copy of the status to work with
 	newStatus := *status
 
 	switch event {
-	case updaterDomain.EventThresholdExceeded:
+	case domain.EventThresholdExceeded:
 		// Transition to InProgressVmSpecUp when CPU threshold is exceeded
-		newStatus.CurrentState = updaterDomain.StateInProgressVmSpecUp
+		newStatus.CurrentState = domain.StateInProgressVmSpecUp
 		newStatus.Message = "CPU threshold exceeded, initiating VM spec up"
 
 		// Record CPU metrics
@@ -41,7 +41,7 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *updaterDomain.Co
 
 		return &newStatus, nil
 
-	case updaterDomain.EventInitialize:
+	case domain.EventInitialize:
 		// Stay in Monitoring state, update metrics
 		newStatus.Message = "Monitoring CPU utilization"
 
@@ -63,7 +63,7 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *updaterDomain.Co
 }
 
 // OnEnter is called when entering the Monitoring state
-func (h *monitoringHandler) OnEnter(ctx context.Context, status *updaterDomain.ControlPlaneStatus) (*updaterDomain.ControlPlaneStatus, error) {
+func (h *monitoringHandler) OnEnter(ctx context.Context, status *domain.ControlPlaneStatus) (*domain.ControlPlaneStatus, error) {
 	newStatus := *status
 
 	// Record the event
@@ -82,7 +82,7 @@ func (h *monitoringHandler) OnEnter(ctx context.Context, status *updaterDomain.C
 }
 
 // OnExit is called when exiting the Monitoring state
-func (h *monitoringHandler) OnExit(ctx context.Context, status *updaterDomain.ControlPlaneStatus) (*updaterDomain.ControlPlaneStatus, error) {
+func (h *monitoringHandler) OnExit(ctx context.Context, status *domain.ControlPlaneStatus) (*domain.ControlPlaneStatus, error) {
 	// Nothing special to do on exit
 	return status, nil
 }

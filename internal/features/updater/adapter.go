@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"k2p-updater/cmd/app"
-	ExporterDomain "k2p-updater/internal/features/exporter/domain"
+	exporterDomain "k2p-updater/internal/features/exporter/domain"
 	metricDomain "k2p-updater/internal/features/metric/domain"
-	updaterDomain "k2p-updater/internal/features/updater/domian"
+	updaterDomain "k2p-updater/internal/features/updater/domain"
 	"k2p-updater/internal/features/updater/service"
 	"k2p-updater/pkg/resource"
 )
@@ -16,7 +16,7 @@ func NewProvider(
 	ctx context.Context,
 	config *app.UpdaterConfig,
 	metricsService metricDomain.Provider,
-	exporterService ExporterDomain.Provider,
+	exporterService exporterDomain.Provider,
 	resourceFactory *resource.Factory,
 ) (updaterDomain.Provider, error) {
 	// Create backend client

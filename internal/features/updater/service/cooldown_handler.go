@@ -1,0 +1,95 @@
+package service
+
+import (
+	"context"
+	"fmt"
+	"k2p-updater/internal/features/updater/domain"
+	"k2p-updater/pkg/resource"
+	"time"
+)
+
+// coolDownHandler handles the CoolDown state
+type coolDownHandler struct {
+	resourceFactory *resource.Factory
+}
+
+// newCoolDownHandler creates a new handler for CoolDown state
+func newCoolDownHandler(resourceFactory *resource.Factory) domain.StateHandler {
+	return &coolDownHandler{
+		resourceFactory: resourceFactory,
+	}
+}
+
+// Handle processes events for the CoolDown state
+func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlaneStatus, event domain.Event, data map[string]interface{}) (*domain.ControlPlaneStatus, error) {
+	// Create a copy of the status to work with
+	newStatus := *status
+
+	switch event {
+	case domain.EventInitialize:
+		// Just update the message with remaining cooldown time
+		if !newStatus.CoolDownEndTime.IsZero() {
+			remaining := time.Until(newStatus.CoolDownEndTime)
+			if remaining < 0 {
+				remaining = 0
+			}
+			newStatus.Message = fmt.Sprintf("In cooldown period, %.1f minutes remaining",
+				remaining.Minutes())
+		}
+		return &newStatus, nil
+
+	case domain.EventCooldownEnded:
+		// Transition to PendingVmSpecUp when cooldown ends
+		newStatus.CurrentState = domain.StatePendingVmSpecUp
+		newStatus.Message = "Cooldown period ended, ready for next spec up cycle"
+
+		// Record CPU metrics if available
+		if data != nil {
+			if cpu, ok := data["cpuUtilization"].(float64); ok {
+				newStatus.CPUUtilization = cpu
+			}
+			if windowAvg, ok := data["windowAverageUtilization"].(float64); ok {
+				newStatus.WindowAverageUtilization = windowAvg
+			}
+		}
+
+		return &newStatus, nil
+	}
+
+	// Default: no state change for other events
+	return &newStatus, nil
+}
+
+// OnEnter is called when entering the CoolDown state
+func (h *coolDownHandler) OnEnter(ctx context.Context, status *domain.ControlPlaneStatus) (*domain.ControlPlaneStatus, error) {
+	newStatus := *status
+
+	// Make sure CoolDownEndTime is set
+	if newStatus.CoolDownEndTime.IsZero() {
+		// Default cooldown period (should come from config)
+		cooldownPeriod := 5 * time.Minute
+		newStatus.CoolDownEndTime = time.Now().Add(cooldownPeriod)
+	}
+
+	// Calculate cooldown duration
+	cooldownMinutes := time.Until(newStatus.CoolDownEndTime).Minutes()
+
+	// Record the event
+	h.resourceFactory.Event().NormalRecordWithNode(
+		ctx,
+		"updater",
+		status.NodeName,
+		"CoolDown",
+		"Node %s entered cooldown period for %.1f minutes after VM spec up",
+		status.NodeName,
+		cooldownMinutes,
+	)
+
+	return &newStatus, nil
+}
+
+// OnExit is called when exiting the CoolDown state
+func (h *coolDownHandler) OnExit(ctx context.Context, status *domain.ControlPlaneStatus) (*domain.ControlPlaneStatus, error) {
+	// Nothing special to do on exit
+	return status, nil
+}

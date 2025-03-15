@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"k2p-updater/internal/features/updater/domian"
+	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
 )
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"k2p-updater/internal/common"
-	updaterDomain "k2p-updater/internal/features/updater/domian"
+	updaterDomain "k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
 	"log"
 	"sync"

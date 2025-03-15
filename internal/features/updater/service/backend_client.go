@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"k2p-updater/cmd/app"
-	updaterDomain "k2p-updater/internal/features/updater/domian"
+	"k2p-updater/internal/features/updater/domain"
 	"net/http"
 	"strings"
 	"time"
@@ -19,7 +19,7 @@ type BackendClient struct {
 }
 
 // NewBackendClient creates a new backend client
-func NewBackendClient(config *app.UpdaterConfig) updaterDomain.BackendClient {
+func NewBackendClient(config *app.UpdaterConfig) domain.BackendClient {
 	return &BackendClient{
 		baseURL: "http://backend-api/v1", // Default, should be configured
 		apiKey:  "api-key",               // Default, should be configured

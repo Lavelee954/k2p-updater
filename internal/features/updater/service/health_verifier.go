@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	exporterDomain "k2p-updater/internal/features/exporter/domain"
-	updaterDomain "k2p-updater/internal/features/updater/domian"
+	"k2p-updater/internal/features/updater/domain"
 	"time"
 )
 
@@ -14,7 +14,7 @@ type HealthVerifier struct {
 }
 
 // NewHealthVerifier creates a new health verifier
-func NewHealthVerifier(exporterService exporterDomain.Provider) updaterDomain.HealthVerifier {
+func NewHealthVerifier(exporterService exporterDomain.Provider) domain.HealthVerifier {
 	return &HealthVerifier{
 		exporterService: exporterService,
 	}

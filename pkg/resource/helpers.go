@@ -12,14 +12,6 @@ type Helpers struct {
 	Template      *Template
 }
 
-// NewResourceHelpers creates a new ResourceHelpers instance
-func NewResourceHelpers(client dynamic.Interface, template *Template) *Helpers {
-	return &Helpers{
-		DynamicClient: client,
-		Template:      template,
-	}
-}
-
 // GetGVR returns the GroupVersionResource for a resource key
 func (r *Helpers) GetGVR(resourceKey string) (schema.GroupVersionResource, error) {
 	resource, exists := r.Template.Key[resourceKey]

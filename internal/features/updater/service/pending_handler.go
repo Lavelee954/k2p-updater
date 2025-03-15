@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
 	"log"
+	"time"
 )
 
 // pendingHandler handles the PendingVmSpecUp state
@@ -77,10 +79,20 @@ func (h *pendingHandler) OnEnter(ctx context.Context, status *domain.ControlPlan
 	)
 
 	if err != nil {
-		log.Printf("Failed to record completion event for node %s: %v", status.NodeName, err)
+		log.Printf("Failed to record event for node %s: %v", status.NodeName, err)
 		// Don't return error as we don't want to prevent state transition
 	} else {
-		log.Printf("Successfully recorded completion event for node %s", status.NodeName)
+		log.Printf("Successfully recorded event for node %s", status.NodeName)
+	}
+
+	// If this is the first run and CoolDown is true (as per requirements)
+	// Set CoolDown to true on initial startup of the application
+	if newStatus.CoolDownEndTime.IsZero() {
+		// Default cooldown period of 10 minutes
+		cooldownPeriod := 10 * time.Minute
+		newStatus.CoolDownEndTime = time.Now().Add(cooldownPeriod)
+		newStatus.Message = fmt.Sprintf("Initial startup cooldown period for %.1f minutes",
+			cooldownPeriod.Minutes())
 	}
 
 	return &newStatus, nil

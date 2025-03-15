@@ -58,6 +58,36 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *domain.ControlPl
 		}
 
 		return &newStatus, nil
+
+	case domain.EventMonitoringStatus:
+		// Update monitoring status with current CPU metrics
+		if data != nil {
+			if cpu, ok := data["cpuUtilization"].(float64); ok {
+				newStatus.CPUUtilization = cpu
+			}
+			if windowAvg, ok := data["windowAverageUtilization"].(float64); ok {
+				newStatus.WindowAverageUtilization = windowAvg
+			}
+		}
+
+		// Update message with current CPU utilization
+		newStatus.Message = fmt.Sprintf("Monitoring CPU utilization: current %.2f%%, window avg %.2f%%",
+			newStatus.CPUUtilization,
+			newStatus.WindowAverageUtilization)
+
+		// Record the event in CR message
+		h.resourceFactory.Event().NormalRecordWithNode(
+			ctx,
+			"updater",
+			status.NodeName,
+			"CPUMetricsUpdate",
+			"Node %s CPU metrics: current %.2f%%, window avg %.2f%%",
+			status.NodeName,
+			newStatus.CPUUtilization,
+			newStatus.WindowAverageUtilization,
+		)
+
+		return &newStatus, nil
 	}
 
 	// Default: no state change

@@ -7,11 +7,12 @@ import (
 	metricDomain "k2p-updater/internal/features/metric/domain"
 	updaterDomain "k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
-	"k8s.io/client-go/kubernetes"
 	"log"
 	"strings"
 	"sync"
 	"time"
+
+	"k8s.io/client-go/kubernetes"
 )
 
 // UpdaterService implements the updater.Provider interface
@@ -391,22 +392,6 @@ func (s *UpdaterService) initializeNode(ctx context.Context, nodeName string) er
 		}
 	}
 
-	// Add test event for each node during initialization
-	log.Printf("Creating test event for node: %s", nodeName)
-	err = s.resourceFactory.Event().NormalRecordWithNode(
-		ctx,
-		"updater",
-		nodeName,
-		"NodeInitialization",
-		"Test event for node %s during initialization",
-		nodeName,
-	)
-	if err != nil {
-		log.Printf("Failed to create test event for node %s: %v", nodeName, err)
-	} else {
-		log.Printf("Successfully created test event for node %s", nodeName)
-	}
-
 	// Initialize with data
 	data := map[string]interface{}{
 		"cpuUtilization":           currentCPU,
@@ -424,8 +409,10 @@ func (s *UpdaterService) initializeNode(ctx context.Context, nodeName string) er
 
 // monitoringLoop periodically checks CPU utilization and triggers events
 func (s *UpdaterService) monitoringLoop(ctx context.Context) {
-	ticker := time.NewTicker(s.config.MonitoringInterval)
-	defer ticker.Stop()
+	monitoringTicker := time.NewTicker(s.config.MonitoringInterval)
+	statusUpdateTicker := time.NewTicker(1 * time.Minute) // Update status every minute
+	defer monitoringTicker.Stop()
+	defer statusUpdateTicker.Stop()
 
 	for {
 		select {
@@ -433,16 +420,18 @@ func (s *UpdaterService) monitoringLoop(ctx context.Context) {
 			return
 		case <-s.stopChan:
 			return
-		case <-ticker.C:
+		case <-monitoringTicker.C:
 			s.updateAllNodeMetrics(ctx)
+		case <-statusUpdateTicker.C:
+			s.updateAllNodeStatus(ctx)
 		}
 	}
 }
 
 // cooldownLoop periodically updates cooldown status
 func (s *UpdaterService) cooldownLoop(ctx context.Context) {
-	ticker := time.NewTicker(s.config.CooldownUpdateInterval)
-	defer ticker.Stop()
+	cooldownTicker := time.NewTicker(s.config.CooldownUpdateInterval)
+	defer cooldownTicker.Stop()
 
 	for {
 		select {
@@ -450,8 +439,49 @@ func (s *UpdaterService) cooldownLoop(ctx context.Context) {
 			return
 		case <-s.stopChan:
 			return
-		case <-ticker.C:
+		case <-cooldownTicker.C:
 			s.updateAllCooldowns(ctx)
+		}
+	}
+}
+
+// updateAllNodeStatus updates the status messages for all nodes
+func (s *UpdaterService) updateAllNodeStatus(ctx context.Context) {
+	s.nodesMutex.RLock()
+	nodesToUpdate := make([]string, len(s.nodes))
+	copy(nodesToUpdate, s.nodes)
+	s.nodesMutex.RUnlock()
+
+	for _, nodeName := range nodesToUpdate {
+		// Get current state
+		state, err := s.stateMachine.GetCurrentState(ctx, nodeName)
+		if err != nil {
+			log.Printf("Failed to get state for node %s: %v", nodeName, err)
+			continue
+		}
+
+		// Get current CPU metrics
+		currentCPU, windowAvg, err := s.GetNodeCPUUtilization(ctx, nodeName)
+		if err != nil {
+			log.Printf("Failed to get CPU metrics for status update: %v", err)
+			continue
+		}
+
+		data := map[string]interface{}{
+			"cpuUtilization":           currentCPU,
+			"windowAverageUtilization": windowAvg,
+		}
+
+		// Update status based on current state
+		switch state {
+		case updaterDomain.StateMonitoring:
+			if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventMonitoringStatus, data); err != nil {
+				log.Printf("Failed to update monitoring status: %v", err)
+			}
+		case updaterDomain.StateCoolDown:
+			if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventCooldownStatus, data); err != nil {
+				log.Printf("Failed to update cooldown status: %v", err)
+			}
 		}
 	}
 }
@@ -576,6 +606,30 @@ func (s *UpdaterService) updateAllCooldowns(ctx context.Context) {
 
 			if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventCooldownEnded, data); err != nil {
 				log.Printf("Failed to handle cooldown ended event: %v", err)
+			} else {
+				// For PendingVmSpecUp -> Monitoring transition
+				if state == updaterDomain.StatePendingVmSpecUp {
+					log.Printf("Node %s exited cooldown period, now in Monitoring state", nodeName)
+					// Fire PendingVmSpecUp event when CoolDown becomes true
+					s.resourceFactory.Event().NormalRecordWithNode(
+						ctx,
+						"updater",
+						nodeName,
+						"PendingVmSpecUp",
+						"Node %s cooldown period ended, entering monitoring state",
+						nodeName,
+					)
+				} else if state == updaterDomain.StateCoolDown {
+					// Fire CompletedVmSpecUp event when CoolDown becomes true
+					s.resourceFactory.Event().NormalRecordWithNode(
+						ctx,
+						"updater",
+						nodeName,
+						"CompletedVmSpecUp",
+						"Node %s cooldown period ended, entering monitoring state",
+						nodeName,
+					)
+				}
 			}
 		} else {
 			// Update the cooldown message with remaining time
@@ -584,13 +638,14 @@ func (s *UpdaterService) updateAllCooldowns(ctx context.Context) {
 				remaining = 0
 			}
 
+			// Update cooldown status every minute
 			data := map[string]interface{}{
-				"message": fmt.Sprintf("In cooldown period, %.1f minutes remaining",
-					remaining.Minutes()),
+				"cpuUtilization":           status.CPUUtilization,
+				"windowAverageUtilization": status.WindowAverageUtilization,
 			}
 
-			// Just update the message
-			if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventInitialize, data); err != nil {
+			// Use CooldownStatus event for more detailed updates
+			if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventCooldownStatus, data); err != nil {
 				log.Printf("Failed to update cooldown message: %v", err)
 			}
 		}

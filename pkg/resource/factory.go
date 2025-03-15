@@ -186,36 +186,3 @@ func convertToTemplate(namespace, group, version string, definitions map[string]
 
 	return template, nil
 }
-
-//func (f *Factory) CreateTestEvents(ctx context.Context) {
-//	log.Println("Testing factory event creation directly")
-//
-//	// Test with concrete values
-//	err := f.eventHandler.NormalRecord(
-//		ctx,
-//		"updater",
-//		"TestEvent",
-//		"Direct factory test event",
-//	)
-//
-//	if err != nil {
-//		log.Printf("Factory direct event creation failed: %v", err)
-//	} else {
-//		log.Printf("Factory direct event creation succeeded")
-//	}
-//
-//	// Test with node name
-//	err = f.eventHandler.NormalRecordWithNode(
-//		ctx,
-//		"updater",
-//		"cp-k8s",
-//		"TestNodeEvent",
-//		"Direct factory test event for node cp-k8s",
-//	)
-//
-//	if err != nil {
-//		log.Printf("Factory node event creation failed: %v", err)
-//	} else {
-//		log.Printf("Factory node event creation succeeded")
-//	}
-//}

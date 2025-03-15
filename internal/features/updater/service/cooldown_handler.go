@@ -39,6 +39,29 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 		}
 		return &newStatus, nil
 
+	case domain.EventCooldownStatus:
+		// Update cooldown remaining message
+		if !newStatus.CoolDownEndTime.IsZero() {
+			remaining := time.Until(newStatus.CoolDownEndTime)
+			if remaining < 0 {
+				remaining = 0
+			}
+			newStatus.Message = fmt.Sprintf("In cooldown period, %.1f minutes remaining",
+				remaining.Minutes())
+		}
+
+		// Update CPU metrics if available
+		if data != nil {
+			if cpu, ok := data["cpuUtilization"].(float64); ok {
+				newStatus.CPUUtilization = cpu
+			}
+			if windowAvg, ok := data["windowAverageUtilization"].(float64); ok {
+				newStatus.WindowAverageUtilization = windowAvg
+			}
+		}
+
+		return &newStatus, nil
+
 	case domain.EventCooldownEnded:
 		// Transition to PendingVmSpecUp when cooldown ends
 		newStatus.CurrentState = domain.StatePendingVmSpecUp

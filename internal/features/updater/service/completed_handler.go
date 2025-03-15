@@ -60,16 +60,16 @@ func (h *completedHandler) Handle(ctx context.Context, status *domain.ControlPla
 func (h *completedHandler) OnEnter(ctx context.Context, status *domain.ControlPlaneStatus) (*domain.ControlPlaneStatus, error) {
 	newStatus := *status
 
-	// Record the completion event
-	log.Printf("Recording completion event for node %s", status.NodeName)
+	// Record the event
 	err := h.resourceFactory.Event().NormalRecordWithNode(
 		ctx,
 		"updater",
 		status.NodeName,
 		"CompletedVmSpecUp",
-		"Node %s successfully completed VM spec up process",
+		"Node %s completed VM spec up process successfully",
 		status.NodeName,
 	)
+
 	if err != nil {
 		log.Printf("Failed to record completion event for node %s: %v", status.NodeName, err)
 		// Don't return error as we don't want to prevent state transition
@@ -77,19 +77,25 @@ func (h *completedHandler) OnEnter(ctx context.Context, status *domain.ControlPl
 		log.Printf("Successfully recorded completion event for node %s", status.NodeName)
 	}
 
-	// Automatically enter cooldown after recording completion
-	cooldownPeriod := 5 * time.Minute
+	// Automatically transition to cooldown state after completion
+	// This ensures we follow the requirements: CompletedVmSpecUp -> CoolDown
+	cooldownPeriod := 10 * time.Minute // Set default cooldown period
+	cooldownEndTime := time.Now().Add(cooldownPeriod)
+
 	data := map[string]interface{}{
-		"cooldownPeriod": cooldownPeriod,
+		"coolDownEndTime": cooldownEndTime,
+		"cooldownPeriod":  cooldownPeriod,
 	}
 
-	tempStatus, err := h.Handle(ctx, &newStatus, domain.EventEnterCooldown, data)
+	// Instead of trying to access the state machine directly, we'll handle it here
+	// Process the cooldown event directly in the OnEnter method
+	cooledDownStatus, err := h.Handle(ctx, &newStatus, domain.EventEnterCooldown, data)
 	if err != nil {
-		log.Printf("Failed to handle cooldown event for node %s: %v", status.NodeName, err)
-		// Continue with original status rather than failing the transition
+		log.Printf("Failed to handle cooldown event: %v", err)
 		return &newStatus, nil
 	}
-	return tempStatus, nil
+
+	return cooledDownStatus, nil
 }
 
 // OnExit is called when exiting the CompletedVmSpecUp state

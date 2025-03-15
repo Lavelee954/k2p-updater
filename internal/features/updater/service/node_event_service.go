@@ -1,4 +1,3 @@
-// node_event_service.go
 package service
 
 import (
@@ -20,6 +19,8 @@ type NodeEventService struct {
 	nodesMutex       sync.RWMutex
 	stopChan         chan struct{}
 	startOnce        sync.Once
+	serviceCtx       context.Context
+	cancelFunc       context.CancelFunc
 }
 
 // NewNodeEventService creates a new node event service
@@ -55,13 +56,24 @@ func (s *NodeEventService) Start(ctx context.Context) error {
 	s.startOnce.Do(func() {
 		log.Println("Starting node event service...")
 
-		// Create a separate background context that won't be canceled with the parent
-		eventCtx := context.Background()
+		// Create a separate context that can be explicitly canceled
+		s.serviceCtx, s.cancelFunc = context.WithCancel(context.Background())
 
-		// Start background goroutine for periodic events with the background context
-		go s.eventCreationLoop(eventCtx)
+		// Start background goroutine with the cancellable context
+		go s.eventCreationLoop(s.serviceCtx)
 
-		// Add explicit confirmation that the goroutine is started
+		// Add a goroutine to handle parent context cancellation
+		go func() {
+			select {
+			case <-ctx.Done():
+				log.Println("Parent context canceled, stopping node event service...")
+				s.Stop()
+			case <-s.stopChan:
+				log.Println("Node event service explicitly stopped")
+				return
+			}
+		}()
+
 		log.Println("Node event service background loop started")
 	})
 
@@ -70,7 +82,15 @@ func (s *NodeEventService) Start(ctx context.Context) error {
 
 // Stop stops the event service
 func (s *NodeEventService) Stop() {
+	log.Println("Stopping node event service...")
+
+	if s.cancelFunc != nil {
+		s.cancelFunc()
+	}
+
 	close(s.stopChan)
+
+	log.Println("Node event service stopped")
 }
 
 // eventCreationLoop periodically creates events for all nodes

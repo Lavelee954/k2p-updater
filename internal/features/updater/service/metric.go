@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -87,15 +88,24 @@ func (c *DefaultMetricsComponent) monitorNodesReadiness(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Printf("Metrics monitoring stopped due to context cancellation: %v", ctx.Err())
 			return
 		case <-ticker.C:
-			c.checkAllNodesMetricsReadiness(ctx)
+			if err := c.checkAllNodesMetricsReadiness(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Printf("Error checking metrics readiness: %v", err)
+			}
 		}
 	}
 }
 
 // checkAllNodesMetricsReadiness verifies metrics readiness for all nodes
-func (c *DefaultMetricsComponent) checkAllNodesMetricsReadiness(ctx context.Context) {
+func (c *DefaultMetricsComponent) checkAllNodesMetricsReadiness(ctx context.Context) error {
+	// Add a check for context cancellation at the beginning
+	if ctx.Err() != nil {
+		log.Printf("Skipping metrics readiness check due to context cancellation: %v", ctx.Err())
+		return nil
+	}
+
 	c.statusMutex.RLock()
 	nodes := make([]string, 0, len(c.nodeStatus))
 	for node := range c.nodeStatus {
@@ -104,8 +114,17 @@ func (c *DefaultMetricsComponent) checkAllNodesMetricsReadiness(ctx context.Cont
 	c.statusMutex.RUnlock()
 
 	for _, nodeName := range nodes {
+		// Check context cancellation during iteration
+		if ctx.Err() != nil {
+			log.Printf("Stopping metrics readiness check due to context cancellation: %v", ctx.Err())
+			return nil
+		}
+
+		// Call the method directly as in the original code
 		c.checkNodeMetricsReadiness(ctx, nodeName)
 	}
+
+	return nil
 }
 
 // checkNodeMetricsReadiness checks if metrics are available for a specific node
@@ -219,6 +238,7 @@ func (c *DefaultMetricsComponent) updateNodeStatusInStateMachine(ctx context.Con
 			log.Printf("Failed to update node state based on metrics state: %v", err)
 		}
 	}
+
 }
 
 // GetMetricsState returns the current metrics collection state for a node

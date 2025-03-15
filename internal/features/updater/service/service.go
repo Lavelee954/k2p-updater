@@ -38,6 +38,7 @@ type UpdaterService struct {
 	stopChan   chan struct{}
 	nodes      []string
 	nodesMutex sync.RWMutex
+	cancelFunc context.CancelFunc
 }
 
 // NewUpdaterService creates a new updater service
@@ -139,31 +140,58 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 			log.Printf("Successfully found updater resource k2pupdater-master")
 		}
 
-		// IMPORTANT: Using a new background context that won't be canceled
-		backgroundCtx := context.Background()
+		// Use a derived context instead of background context
+		serviceCtx, cancel := context.WithCancel(context.Background())
+		s.cancelFunc = cancel // Store cancel function for cleanup
 
 		// Start background monitoring with explicit logging
 		log.Println("Starting background monitoring loops...")
 
 		go func() {
 			log.Println("Monitoring loop started")
-			s.monitoringLoop(backgroundCtx)
+			s.monitoringLoop(serviceCtx)
 		}()
 
 		go func() {
 			log.Println("Cooldown loop started")
-			s.cooldownLoop(backgroundCtx)
+			s.cooldownLoop(serviceCtx)
 		}()
 
 		go func() {
 			log.Println("Recovery loop started")
-			s.recoveryLoop(backgroundCtx)
+			s.recoveryLoop(serviceCtx)
+		}()
+
+		// Add a goroutine to handle parent context cancellation
+		go func() {
+			select {
+			case <-ctx.Done():
+				log.Println("Parent context canceled, stopping service...")
+				s.Stop()
+			case <-s.stopChan:
+				log.Println("Service explicitly stopped")
+				return
+			}
 		}()
 
 		log.Println("All background monitoring loops initialized")
 	})
 
 	return startErr
+}
+
+func (s *UpdaterService) Stop() {
+	log.Println("Stopping updater service...")
+
+	if s.cancelFunc != nil {
+		s.cancelFunc()
+	}
+
+	close(s.stopChan)
+
+	// Add additional cleanup if necessary
+
+	log.Println("Updater service stopped")
 }
 
 // GetStateMachine returns the state machine instance

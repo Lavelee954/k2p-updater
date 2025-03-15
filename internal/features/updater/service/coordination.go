@@ -63,6 +63,11 @@ func (c *CoordinationManager) IsAnyNodeSpecingUp(ctx context.Context, nodes []st
 
 // refreshAndCheck refreshes the state cache and checks for spec up
 func (c *CoordinationManager) refreshAndCheck(ctx context.Context, nodes []string) (bool, string, error) {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return false, "", ctx.Err()
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -74,6 +79,11 @@ func (c *CoordinationManager) refreshAndCheck(ctx context.Context, nodes []strin
 
 	// First pass: look specifically for any node in InProgressVmSpecUp state
 	for _, nodeName := range nodes {
+		// Check for context cancellation during iteration
+		if ctx.Err() != nil {
+			return false, "", ctx.Err()
+		}
+
 		state, err := c.stateMachine.GetCurrentState(ctx, nodeName)
 		if err != nil {
 			log.Printf("Warning: Failed to get state for node %s: %v", nodeName, err)

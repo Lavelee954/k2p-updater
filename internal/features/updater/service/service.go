@@ -159,6 +159,12 @@ func (s *UpdaterService) VerifySpecUpHealth(ctx context.Context, nodeName string
 		return false, fmt.Errorf("failed to get node status: %w", err)
 	}
 
+	// Validate that we're in an appropriate state to check health
+	if status.CurrentState != domain.StateInProgressVmSpecUp {
+		return false, fmt.Errorf("cannot verify health for node %s in %s state",
+			nodeName, status.CurrentState)
+	}
+
 	// Check if spec up is completed with backend
 	completed, err := s.backendClient.GetVMSpecUpStatus(ctx, nodeName)
 	if err != nil {

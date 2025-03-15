@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
 	"time"
@@ -43,9 +44,9 @@ func (h *completedHandler) Handle(ctx context.Context, status *domain.ControlPla
 			}
 		}
 
-		// Calculate cooldown duration
+		// Calculate cooldown duration and include it in the message
 		cooldownMinutes := time.Until(newStatus.CoolDownEndTime).Minutes()
-		newStatus.Message = "VM spec up completed, entering cooldown period"
+		newStatus.Message = fmt.Sprintf("VM spec up completed, entering cooldown period for %.1f minutes", cooldownMinutes)
 
 		return &newStatus, nil
 	}

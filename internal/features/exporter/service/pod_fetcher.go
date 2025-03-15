@@ -2,30 +2,22 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"k2p-updater/internal/features/exporter/domain"
+
 	v1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
 )
 
-// podFetcher implements the domain.PodFetcher interface.
+// podFetcher는 domain.PodFetcher 인터페이스를 구현합니다.
 type podFetcher struct {
-	client kubernetes.Interface
+	client domain.KubernetesClient
 }
 
-// FetchPods implements domain.PodFetcher.FetchPods.
-func (f *podFetcher) FetchPods(ctx context.Context, namespace, labelSelector string) ([]v1.Pod, error) {
-	pods, err := f.client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: labelSelector,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list pods: %w", err)
-	}
-	return pods.Items, nil
-}
-
-// newPodFetcher creates a new pod fetcher.
-func newPodFetcher(client kubernetes.Interface) domain.PodFetcher {
+// newPodFetcher는 새로운 PodFetcher를 생성합니다.
+func newPodFetcher(client domain.KubernetesClient) domain.PodFetcher {
 	return &podFetcher{client: client}
+}
+
+// FetchPods는 domain.PodFetcher.FetchPods를 구현합니다.
+func (f *podFetcher) FetchPods(ctx context.Context, namespace, labelSelector string) ([]v1.Pod, error) {
+	return f.client.GetPods(ctx, namespace, labelSelector)
 }

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/kubernetes"
 )
 
 // Service implements the domain.Provider interface.
@@ -26,7 +25,7 @@ type Service struct {
 }
 
 // NewService creates a new exporter service with default dependencies.
-func NewService(client kubernetes.Interface, config *app.ExporterConfig) *Service {
+func NewService(client domain.KubernetesClient, config *app.ExporterConfig) *Service {
 	return &Service{
 		podFetcher:      newPodFetcher(client),
 		healthChecker:   newHealthChecker(config.HealthCheckTimeout),

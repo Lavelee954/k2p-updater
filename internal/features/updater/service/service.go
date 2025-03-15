@@ -29,6 +29,7 @@ type UpdaterService struct {
 	kubeClient          kubernetes.Interface
 	recoveryManager     *RecoveryManager
 	metricsCollector    *MetricsCollector
+	metricsComponent    MetricsComponent
 
 	// Control structures
 	startOnce  sync.Once
@@ -55,11 +56,22 @@ func NewUpdaterService(
 		CooldownUpdateInterval: time.Minute, // Default to 1 minute
 	}
 
+	// Create metrics component
+	metricsConfig := &app.MetricsConfig{
+		WindowSize:     10 * time.Minute, // Default values, should come from config
+		SlidingSize:    1 * time.Minute,
+		CooldownPeriod: config.CooldownPeriod,
+		ScaleTrigger:   config.ScaleThreshold,
+	}
+
 	// Create metrics collector
 	metricsCollector := NewMetricsCollector()
 
 	// Create state machine
 	stateMachine := NewStateMachine(resourceFactory, metricsCollector)
+
+	// Initialize metrics component
+	metricsComponent := NewMetricsComponent(metricsService, stateMachine, metricsConfig)
 
 	return &UpdaterService{
 		config:           domainConfig,
@@ -70,6 +82,7 @@ func NewUpdaterService(
 		resourceFactory:  resourceFactory,
 		kubeClient:       kubeClient,
 		metricsCollector: metricsCollector,
+		metricsComponent: metricsComponent,
 		stopChan:         make(chan struct{}),
 		nodes:            []string{},
 	}
@@ -94,6 +107,11 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 				log.Printf("Failed to initialize node %s: %v", nodeName, err)
 				// Continue with other nodes
 			}
+		}
+
+		// Start metrics component monitoring
+		if err := s.metricsComponent.StartMonitoring(ctx); err != nil {
+			log.Printf("Warning: Failed to start metrics monitoring: %v", err)
 		}
 
 		// Start background monitoring
@@ -217,20 +235,7 @@ func (s *UpdaterService) VerifySpecUpHealth(ctx context.Context, nodeName string
 
 // GetNodeCPUUtilization gets the current CPU utilization for a node
 func (s *UpdaterService) GetNodeCPUUtilization(ctx context.Context, nodeName string) (float64, float64, error) {
-	// Get current CPU
-	currentCPU, err := s.metricsService.GetNodeCPUUsage(nodeName)
-	if err != nil {
-		return 0, 0, fmt.Errorf("failed to get current CPU usage: %w", err)
-	}
-
-	// Get window average
-	windowAvg, err := s.metricsService.GetWindowAverageCPU(nodeName)
-	if err != nil {
-		// If we can't get window average, just use current
-		windowAvg = currentCPU
-	}
-
-	return currentCPU, windowAvg, nil
+	return s.metricsComponent.GetNodeCPUMetrics(nodeName)
 }
 
 // IsCooldownActive checks if a node is in cooldown period
@@ -256,8 +261,6 @@ func (s *UpdaterService) IsCooldownActive(ctx context.Context, nodeName string) 
 
 	return inCooldown, remaining, nil
 }
-
-// Private helper methods
 
 // discoverNodes discovers control plane nodes to monitor
 func (s *UpdaterService) discoverNodes(ctx context.Context) error {
@@ -365,14 +368,12 @@ func (s *UpdaterService) cooldownLoop(ctx context.Context) {
 	}
 }
 
-// updateAllNodeMetrics updates CPU metrics for all nodes with coordination
 func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 	s.nodesMutex.RLock()
 	nodesToUpdate := make([]string, len(s.nodes))
 	copy(nodesToUpdate, s.nodes)
 	s.nodesMutex.RUnlock()
 
-	// Create coordination manager if not already available
 	if s.coordinationManager == nil {
 		s.coordinationManager = NewCoordinationManager(s.stateMachine)
 	}
@@ -391,49 +392,51 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 			continue
 		}
 
-		// Only update metrics for nodes in Monitoring state
-		if state != updaterDomain.StateMonitoring {
-			continue
-		}
+		// For nodes in monitoring state, check CPU threshold
+		if state == updaterDomain.StateMonitoring {
+			thresholdExceeded, currentCPU, windowAvg, err := s.metricsComponent.CheckCPUThresholdExceeded(ctx, nodeName)
+			if err != nil {
+				log.Printf("Failed to check CPU threshold for node %s: %v", nodeName, err)
+				continue
+			}
 
-		// Get current CPU utilization
-		currentCPU, windowAvg, err := s.GetNodeCPUUtilization(ctx, nodeName)
-		if err != nil {
-			log.Printf("Failed to get CPU utilization for %s: %v", nodeName, err)
-			continue
-		}
+			// Prepare event data
+			data := map[string]interface{}{
+				"cpuUtilization":           currentCPU,
+				"windowAverageUtilization": windowAvg,
+			}
 
-		// Prepare event data
-		data := map[string]interface{}{
-			"cpuUtilization":           currentCPU,
-			"windowAverageUtilization": windowAvg,
-		}
-
-		// Check threshold and coordination
-		if windowAvg > s.config.ScaleThreshold {
-			// Only trigger spec up if no other node is being spec'd up
-			if !isSpecingUp {
-				// Trigger threshold exceeded event
+			// If threshold exceeded and no other node is spec'ing up, trigger an event
+			if thresholdExceeded && !isSpecingUp {
 				if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventThresholdExceeded, data); err != nil {
 					log.Printf("Failed to handle threshold exceeded event: %v", err)
 				} else {
 					log.Printf("Node %s triggered for spec up (CPU: %.2f%%)", nodeName, windowAvg)
-
-					// Now this node is spec'ing up, others should wait
 					isSpecingUp = true
 					specingUpNode = nodeName
 				}
-			} else {
+			} else if thresholdExceeded {
 				log.Printf("Node %s exceeded threshold (%.2f%%) but waiting for %s to complete",
 					nodeName, windowAvg, specingUpNode)
-
+				// Just update the metrics
+				if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventInitialize, data); err != nil {
+					log.Printf("Failed to update metrics: %v", err)
+				}
+			} else {
 				// Just update the metrics
 				if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventInitialize, data); err != nil {
 					log.Printf("Failed to update metrics: %v", err)
 				}
 			}
-		} else {
-			// Just update the metrics
+		} else if state == updaterDomain.StatePendingVmSpecUp || state == updaterDomain.StateCoolDown {
+			// For nodes in pending or cooldown state, just update their metrics
+			currentCPU, windowAvg, _ := s.metricsComponent.GetNodeCPUMetrics(nodeName)
+
+			data := map[string]interface{}{
+				"cpuUtilization":           currentCPU,
+				"windowAverageUtilization": windowAvg,
+			}
+
 			if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventInitialize, data); err != nil {
 				log.Printf("Failed to update metrics: %v", err)
 			}

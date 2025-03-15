@@ -22,23 +22,24 @@ func Run() {
 		log.Fatalf("Failed to create Kubernetes clients: %v", err)
 	}
 
-	cr, err := resource.NewManager(cfg, kcfg)
+	// Create a factory first
+	factory, err := resource.NewFactory(cfg, kcfg)
 	if err != nil {
-		log.Fatalf("Failed to create resource manager: %v", err)
+		log.Fatalf("Failed to create resource factory: %v", err)
 		return
 	}
+
+	// Create the manager using the factory
+	cr := resource.NewManager(factory)
 
 	ctx := context.Background()
 
-	// Check if the key exists in the template
-	if _, ok := cr.Templates.Key["updater"]; !ok {
-		log.Fatalf("Resource key 'updater' not found in template")
-		return
-	}
+	// Resource key validation is handled internally by the methods
 
 	statusMsg := "정상적으로 등록되었습니다."
 
-	err = cr.Event.NormalRecord(ctx, "updater", "VmSpecUp", statusMsg)
+	// Use the Event() method to get the event handler
+	err = cr.Event().NormalRecord(ctx, "updater", "VmSpecUp", statusMsg)
 	if err != nil {
 		log.Fatalf("Failed to record event: %v", err)
 		return
@@ -52,8 +53,8 @@ func Run() {
 		"updateStatus":         "Pending",
 	}
 
-	// Use UpdateGeneric with the correct key
-	err = cr.Status.UpdateGeneric(ctx, "updater", statusData)
+	// Use the Status() method to get the status handler
+	err = cr.Status().UpdateGeneric(ctx, "updater", statusData)
 	if err != nil {
 		log.Fatalf("Failed to update status: %v", err)
 		return

@@ -1,3 +1,8 @@
+kubernetes:
+  namespace: "ks-operator"
+  # config_path: "/path/to/kubeconfig"
+  # master_url: "https://kubernetes.default.svc"
+
 resources:
   namespace: "ks-operator"
   group: "k2p.cloud.kt.com"
@@ -15,4 +20,4 @@ resources:
       singular: "k2pupgrader"
       kind: "K2pUpgrader"
       name_format: "k2pupgrader-%s"
-      status_field: "upgraders"
+      tus_field: "upgraders"

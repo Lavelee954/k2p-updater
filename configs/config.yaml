@@ -1,0 +1,18 @@
+resources:
+  namespace: "ks-operator"
+  group: "k2p.cloud.kt.com"
+  version: "v1beta1"
+  scope: "Namespaced"
+  definitions:
+    updater:
+      resource: "k2pupdaters"
+      singular: "k2pupdater"
+      kind: "K2pUpdater"
+      name_format: "k2pupdater-%s"
+      status_field: "updates"
+    upgrader:
+      resource: "k2pupgraders"
+      singular: "k2pupgrader"
+      kind: "K2pUpgrader"
+      name_format: "k2pupgrader-%s"
+      status_field: "upgraders"

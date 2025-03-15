@@ -68,6 +68,8 @@ func (sm *stateMachine) GetCurrentState(ctx context.Context, nodeName string) (d
 
 // HandleEvent processes an event and transitions to the next state if needed
 func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event domain.Event, data map[string]interface{}) error {
+	// Log at the beginning of event handling
+	log.Printf("STATE MACHINE: Handling event %s for node %s", event, nodeName)
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -82,31 +84,41 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 			Message:            "Initializing",
 		}
 		sm.statusMap[nodeName] = status
+		log.Printf("DEBUG: Initializing new node %s in state %s", nodeName, status.CurrentState)
 	}
 
 	// Record original state for metrics and logging
 	originalState := status.CurrentState
-	transitionStart := time.Now()
+	log.Printf("STATE MACHINE: Handling event originalState %s ", originalState)
 
 	// Get current state handler
 	handler, exists := sm.stateHandlers[status.CurrentState]
 	if !exists {
+		log.Printf("ERROR: No handler found for state %s", status.CurrentState)
 		return fmt.Errorf("no handler found for state %s", status.CurrentState)
 	}
 
 	// Handle the event
+	log.Printf("DEBUG: Calling handle for node %s in state %s with event %s",
+		nodeName, status.CurrentState, event)
 	newStatus, err := handler.Handle(ctx, status, event, data)
 	if err != nil {
+		log.Printf("ERROR: Handler error for node %s: %v", nodeName, err)
 		return fmt.Errorf("error handling event %s in state %s: %w", event, status.CurrentState, err)
 	}
 
 	// If state has changed, perform transition
 	if newStatus.CurrentState != status.CurrentState {
+		log.Printf("DEBUG: State transition for node %s: %s -> %s",
+			nodeName, status.CurrentState, newStatus.CurrentState)
+
 		// Call exit handler for the current state
 		exitHandler := sm.stateHandlers[status.CurrentState]
 		if exitHandler != nil {
+			log.Printf("DEBUG: Calling OnExit for node %s state %s",
+				nodeName, status.CurrentState)
 			if _, err := exitHandler.OnExit(ctx, status); err != nil {
-				log.Printf("Error during state exit for node %s: %v", nodeName, err)
+				log.Printf("ERROR: Exit handler error for node %s: %v", nodeName, err)
 			}
 		}
 
@@ -116,26 +128,17 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 		// Call enter handler for the new state
 		enterHandler := sm.stateHandlers[newStatus.CurrentState]
 		if enterHandler != nil {
+			log.Printf("DEBUG: Calling OnEnter for node %s state %s",
+				nodeName, newStatus.CurrentState)
 			if updatedStatus, err := enterHandler.OnEnter(ctx, newStatus); err != nil {
-				log.Printf("Error during state entry for node %s: %v", nodeName, err)
+				log.Printf("ERROR: Enter handler error for node %s: %v", nodeName, err)
 			} else {
 				newStatus = updatedStatus
 			}
 		}
-
-		// Log the state transition
-		log.Printf("State transition for node %s: %s -> %s",
-			nodeName, status.CurrentState, newStatus.CurrentState)
-
-		// Record metrics for the transition if metrics collector is available
-		if sm.metricsCollector != nil {
-			durationSeconds := time.Since(transitionStart).Seconds()
-			sm.metricsCollector.RecordTransitionLatency(
-				nodeName, originalState, newStatus.CurrentState, durationSeconds)
-
-			sm.metricsCollector.UpdateNodeState(
-				nodeName, originalState, newStatus.CurrentState)
-		}
+	} else {
+		log.Printf("DEBUG: Node %s remains in state %s after event %s",
+			nodeName, status.CurrentState, event)
 	}
 
 	// Update CPU metrics if available and metrics collector is configured
@@ -185,9 +188,9 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 
 	// Update the custom resource status
 	if err := sm.updateCRStatus(ctx, nodeName, newStatus); err != nil {
-		log.Printf("Failed to update CR status for node %s: %v", nodeName, err)
-		// We don't return this error since the state machine update was successful
-		// The CR status update failure is logged but doesn't affect the state transition
+		log.Printf("ERROR: Failed to update CR status for node %s: %v", nodeName, err)
+	} else {
+		log.Printf("DEBUG: Successfully updated CR status for node %s", nodeName)
 	}
 
 	return nil
@@ -226,7 +229,11 @@ func (sm *stateMachine) UpdateStatus(ctx context.Context, nodeName string, statu
 
 // updateCRStatus updates the control plane status in the custom resource
 func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, status *domain.ControlPlaneStatus) error {
-	// Convert domain status to CRD-compatible format without extra nesting
+	// Log what we're trying to update
+	log.Printf("State machine updating CR status for node %s: state=%s, CPU=%.2f%%, window=%.2f%%",
+		nodeName, status.CurrentState, status.CPUUtilization, status.WindowAverageUtilization)
+
+	// Convert domain status to CRD-compatible format
 	statusData := map[string]interface{}{
 		"controlPlaneNodeName": nodeName,
 		"cpuWinUsage":          status.WindowAverageUtilization,
@@ -236,6 +243,13 @@ func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, sta
 		"lastUpdateTime":       status.LastTransitionTime.Format(time.RFC3339),
 	}
 
-	// Update the CR status using the resource factory
-	return sm.resourceFactory.Status().UpdateGenericWithNode(ctx, "updater", nodeName, statusData)
+	// Always use "master" as the node name for the updater resource
+	err := sm.resourceFactory.Status().UpdateGenericWithNode(ctx, "updater", "master", statusData)
+	if err != nil {
+		log.Printf("Failed to update CR status for node %s: %v", nodeName, err)
+		return err
+	}
+
+	log.Printf("Successfully updated CR status for node %s via state machine", nodeName)
+	return nil
 }

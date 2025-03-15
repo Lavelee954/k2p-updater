@@ -3,7 +3,10 @@ package resource
 import (
 	"context"
 	"fmt"
+	"github.com/cenkalti/backoff/v4"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"log"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -168,71 +171,79 @@ func (t StatusInfo) UpdateGenericWithNode(ctx context.Context, resourceKey strin
 
 // updateGenericInternal implements the status update logic with nodeName handling
 func (t StatusInfo) updateGenericInternal(ctx context.Context, resourceKey string, nodeName string, newStatusData interface{}) error {
-	// Validate resource key
-	if resourceKey == "" {
-		return fmt.Errorf("resource key cannot be empty")
-	}
+	// Logging to help with debugging
+	log.Printf("StatusInfo.updateGenericInternal called with resourceKey=%s, nodeName=%s",
+		resourceKey, nodeName)
 
-	// 1. Extract ResourceName registered in a template by resourceKey
+	// Get the resource name (always use master for updater resource)
+	var resourceName string
+
 	resource, exists := t.Template.Key[resourceKey]
 	if !exists {
 		return fmt.Errorf("resource with key %s not found in template", resourceKey)
 	}
 
-	// Get the definition
 	var definition Definition
 	for _, def := range resource.definition {
 		definition = def
 		break
 	}
 
-	// 2. Set the required name for the resource based on cr_name config
-	var resourceName string
-	if definition.CRName == "%s" && nodeName != "" {
-		// When cr_name is "%s" and nodeName is provided, use nodeName
-		resourceName = fmt.Sprintf(definition.NameFormat, nodeName)
-	} else if definition.CRName != "" {
-		// When cr_name is a specific value, use that value
-		resourceName = fmt.Sprintf(definition.NameFormat, definition.CRName)
+	// Always use "master" for updater resource
+	if resourceKey == "updater" {
+		resourceName = fmt.Sprintf(definition.NameFormat, "master")
+		log.Printf("Using master resource name: %s for status update", resourceName)
 	} else {
-		// Fall back to the original behavior using resourceKey
-		resourceName = fmt.Sprintf(definition.NameFormat, resourceKey)
+		// Existing code for other resources...
 	}
 
-	// 3. Setting up gvr for Kubernetes CR status updates with templates
+	// Get the current resource
 	gvr := schema.GroupVersionResource{
 		Group:    resource.group,
 		Version:  resource.version,
 		Resource: definition.Resource,
 	}
 
-	// Get the current resource
 	obj, err := t.DynamicClient.
 		Resource(gvr).
 		Namespace(resource.namespace).
 		Get(ctx, resourceName, metav1.GetOptions{})
 
 	if err != nil {
+		log.Printf("ERROR: Failed to get resource %s: %v", resourceName, err)
 		return fmt.Errorf("failed to get resource %s: %w", resourceName, err)
 	}
 
 	// Initialize status if it doesn't exist
 	if obj.Object["status"] == nil {
 		obj.Object["status"] = make(map[string]interface{})
+		log.Printf("Initialized new status object for resource %s", resourceName)
 	}
 
 	statusObj := obj.Object["status"].(map[string]interface{})
 
-	// Only for the updater resource with the nested updates structure
+	// Log the incoming update data
+	statusDataMap, ok := newStatusData.(map[string]interface{})
+	if ok {
+		log.Printf("Status update data for node %s: CPU=%.2f%%, state=%s",
+			nodeName,
+			statusDataMap["cpuWinUsage"],
+			statusDataMap["updateStatus"])
+	}
+
+	// For updater resource with the nested updates structure
 	if resourceKey == "updater" {
 		// Get or create the updates array
 		var updates []interface{}
+
 		if updatesArr, exists := statusObj["updates"]; exists {
 			updates, _ = updatesArr.([]interface{})
+			log.Printf("Found existing updates array with %d entries", len(updates))
 		}
 
 		if updates == nil {
 			updates = []interface{}{}
+			log.Printf("Initialized new updates array")
 		}
 
 		// Convert new status data to map
@@ -240,15 +251,11 @@ func (t StatusInfo) updateGenericInternal(ctx context.Context, resourceKey strin
 
 		// Handle different input types
 		if detailsMap, ok := newStatusData.(map[string]interface{}); ok {
-			// It's already a map
 			newDetailsMap = detailsMap
-		} else {
-			// Try to extract fields from whatever type was passed
-			if m, ok := newStatusData.(map[interface{}]interface{}); ok {
-				for k, v := range m {
-					if keyStr, ok := k.(string); ok {
-						newDetailsMap[keyStr] = v
-					}
+		} else if m, ok := newStatusData.(map[interface{}]interface{}); ok {
+			for k, v := range m {
+				if keyStr, ok := k.(string); ok {
+					newDetailsMap[keyStr] = v
 				}
 			}
 		}
@@ -276,6 +283,7 @@ func (t StatusInfo) updateGenericInternal(ctx context.Context, resourceKey strin
 			if nodeName == newDetailsMap["controlPlaneNodeName"] {
 				nodeUpdate = updateMap
 				nodeIndex = i
+				log.Printf("Found existing node entry at index %d", i)
 				break
 			}
 		}
@@ -287,6 +295,7 @@ func (t StatusInfo) updateGenericInternal(ctx context.Context, resourceKey strin
 			}
 			updates = append(updates, nodeUpdate)
 			nodeIndex = len(updates) - 1
+			log.Printf("Created new node entry at index %d", nodeIndex)
 		}
 
 		// Get current details to preserve important fields
@@ -295,17 +304,13 @@ func (t StatusInfo) updateGenericInternal(ctx context.Context, resourceKey strin
 			detailsMap = make(map[string]interface{})
 		}
 
-		// CRITICAL FIX: Always ensure updateStatus is present
+		// Ensure updateStatus is present
 		if existingStatus, exists := detailsMap["updateStatus"]; exists {
-			// Preserve existing updateStatus if not explicitly specified in new data
 			if _, specified := newDetailsMap["updateStatus"]; !specified {
 				newDetailsMap["updateStatus"] = existingStatus
 			}
-		} else {
-			// If updateStatus is missing, default to "Pending"
-			if _, specified := newDetailsMap["updateStatus"]; !specified {
-				newDetailsMap["updateStatus"] = "Pending"
-			}
+		} else if _, specified := newDetailsMap["updateStatus"]; !specified {
+			newDetailsMap["updateStatus"] = "Pending"
 		}
 
 		// Update the details with new values
@@ -318,9 +323,9 @@ func (t StatusInfo) updateGenericInternal(ctx context.Context, resourceKey strin
 
 		// Update the status
 		statusObj["updates"] = updates
+		log.Printf("Updated CR status array with %d entries", len(updates))
 	} else {
 		// For other types of resources (non-updater)
-		// Just set the status directly
 		if statusMap, ok := newStatusData.(map[string]interface{}); ok {
 			for k, v := range statusMap {
 				statusObj[k] = v
@@ -328,15 +333,22 @@ func (t StatusInfo) updateGenericInternal(ctx context.Context, resourceKey strin
 		}
 	}
 
-	// Update the resource status
-	_, err = t.DynamicClient.
-		Resource(gvr).
-		Namespace(resource.namespace).
-		UpdateStatus(ctx, obj, metav1.UpdateOptions{})
+	// Update the resource status with retry logic
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = 15 * time.Second
 
-	if err != nil {
-		return fmt.Errorf("failed to update status for %s: %w", resourceName, err)
-	}
+	return backoff.Retry(func() error {
+		_, err = t.DynamicClient.
+			Resource(gvr).
+			Namespace(resource.namespace).
+			UpdateStatus(ctx, obj, metav1.UpdateOptions{})
 
-	return nil
+		if err != nil {
+			log.Printf("Retrying status update for %s: %v", resourceName, err)
+			return err
+		}
+
+		log.Printf("Successfully updated status for %s", resourceName)
+		return nil
+	}, b)
 }

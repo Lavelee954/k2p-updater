@@ -16,12 +16,13 @@ import (
 
 // UpdaterService implements the updater.Provider interface
 type UpdaterService struct {
-	config          updaterDomain.UpdaterConfig
-	stateMachine    updaterDomain.StateMachine
-	metricsService  metricDomain.Provider
-	backendClient   updaterDomain.BackendClient
-	healthVerifier  updaterDomain.HealthVerifier
-	resourceFactory *resource.Factory
+	config           updaterDomain.UpdaterConfig
+	stateMachine     updaterDomain.StateMachine
+	metricsService   metricDomain.Provider
+	backendClient    updaterDomain.BackendClient
+	healthVerifier   updaterDomain.HealthVerifier
+	resourceFactory  *resource.Factory
+	nodeEventService *NodeEventService
 
 	// Additional required fields
 	coordinationManager *CoordinationManager
@@ -46,7 +47,7 @@ func NewUpdaterService(
 	healthVerifier updaterDomain.HealthVerifier,
 	resourceFactory *resource.Factory,
 	kubeClient kubernetes.Interface,
-) updaterDomain.Provider { // Change return type to updaterDomain.Provider
+) updaterDomain.Provider {
 	// Convert app config to domain config
 	domainConfig := updaterDomain.UpdaterConfig{
 		ScaleThreshold:         config.ScaleThreshold,
@@ -73,7 +74,8 @@ func NewUpdaterService(
 	// Initialize metrics component
 	metricsComponent := NewMetricsComponent(metricsService, stateMachine, metricsConfig)
 
-	return &UpdaterService{
+	// Create the updater service
+	service := &UpdaterService{
 		config:           domainConfig,
 		stateMachine:     stateMachine,
 		metricsService:   metricsService,
@@ -86,6 +88,15 @@ func NewUpdaterService(
 		stopChan:         make(chan struct{}),
 		nodes:            []string{},
 	}
+
+	// Initialize the node event service
+	service.nodeEventService = NewNodeEventService(
+		stateMachine,
+		metricsComponent,
+		resourceFactory,
+	)
+
+	return service
 }
 
 // Start begins the updater service processing
@@ -93,12 +104,21 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 	var startErr error
 
 	s.startOnce.Do(func() {
-		log.Println("Starting updater service...")
+		// After node initialization
+		log.Println("Verifying resource configurations...")
 
 		// Get the list of nodes to monitor
 		if err := s.discoverNodes(ctx); err != nil {
 			startErr = fmt.Errorf("failed to discover nodes: %w", err)
 			return
+		}
+
+		// Update the node event service with discovered nodes
+		s.nodeEventService.UpdateNodes(s.nodes)
+
+		// Start the node event service
+		if err := s.nodeEventService.Start(ctx); err != nil {
+			log.Printf("Warning: Failed to start node event service: %v", err)
 		}
 
 		// Initialize all nodes to the initial state
@@ -109,10 +129,62 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 			}
 		}
 
-		// Start metrics component monitoring
-		if err := s.metricsComponent.StartMonitoring(ctx); err != nil {
-			log.Printf("Warning: Failed to start metrics monitoring: %v", err)
+		// Try to get the updater resource
+		_, err := s.resourceFactory.GetResource(ctx, "updater", "k2pupdater-master")
+		if err != nil {
+			log.Printf("WARNING: Cannot find updater resource k2pupdater-master: %v", err)
+			log.Printf("Events may not be properly created if the target resource doesn't exist")
+		} else {
+			log.Printf("Successfully found updater resource k2pupdater-master")
 		}
+		// Add periodic event creation for all nodes
+		go func() {
+			// Wait for initial metrics collection
+			time.Sleep(30 * time.Second)
+
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-s.stopChan:
+					return
+				case <-ticker.C:
+					s.nodesMutex.RLock()
+					nodes := make([]string, len(s.nodes))
+					copy(nodes, s.nodes)
+					s.nodesMutex.RUnlock()
+
+					for _, nodeName := range nodes {
+						// Get current status for this node
+						status, err := s.stateMachine.GetStatus(ctx, nodeName)
+						if err != nil {
+							log.Printf("Failed to get status for node %s: %v", nodeName, err)
+							continue
+						}
+
+						// Get current CPU metrics
+						currentCPU, windowAvg, _ := s.GetNodeCPUUtilization(ctx, nodeName)
+
+						// Create an event for this node's status
+						err = s.resourceFactory.Event().NormalRecordWithNode(
+							ctx,
+							"updater",
+							nodeName,
+							"NodeStatus",
+							"Node %s status: state=%s, CPU=%.2f%%, window=%.2f%%",
+							nodeName, status.CurrentState, currentCPU, windowAvg,
+						)
+
+						if err != nil {
+							log.Printf("Failed to create status event for node %s: %v", nodeName, err)
+						}
+					}
+				}
+			}
+		}()
 
 		// Start background monitoring
 		go s.monitoringLoop(ctx)
@@ -317,6 +389,22 @@ func (s *UpdaterService) initializeNode(ctx context.Context, nodeName string) er
 				}
 			}
 		}
+	}
+
+	// Add test event for each node during initialization
+	log.Printf("Creating test event for node: %s", nodeName)
+	err = s.resourceFactory.Event().NormalRecordWithNode(
+		ctx,
+		"updater",
+		nodeName,
+		"NodeInitialization",
+		"Test event for node %s during initialization",
+		nodeName,
+	)
+	if err != nil {
+		log.Printf("Failed to create test event for node %s: %v", nodeName, err)
+	} else {
+		log.Printf("Successfully created test event for node %s", nodeName)
 	}
 
 	// Initialize with data
@@ -532,6 +620,40 @@ func (s *UpdaterService) recoveryLoop(ctx context.Context) {
 			s.nodesMutex.RUnlock()
 
 			s.recoveryManager.CheckAllNodes(ctx, nodesToCheck)
+		}
+	}
+}
+
+// Add a new method for direct event creation
+func (s *UpdaterService) createDirectNodeEvents(ctx context.Context) {
+	log.Println("Creating direct events for all nodes")
+
+	s.nodesMutex.RLock()
+	nodes := make([]string, len(s.nodes))
+	copy(nodes, s.nodes)
+	s.nodesMutex.RUnlock()
+
+	for _, nodeName := range nodes {
+		// Get current CPU metrics
+		currentCPU, windowAvg, _ := s.GetNodeCPUUtilization(ctx, nodeName)
+
+		// Create direct event for this node
+		log.Printf("Creating direct event for node %s (CPU: %.2f%%, Avg: %.2f%%)",
+			nodeName, currentCPU, windowAvg)
+
+		err := s.resourceFactory.Event().NormalRecordWithNode(
+			ctx,
+			"updater",
+			nodeName,
+			"DirectNodeEvent",
+			"Direct event for node %s (CPU: %.2f%%, Window Avg: %.2f%%)",
+			nodeName, currentCPU, windowAvg,
+		)
+
+		if err != nil {
+			log.Printf("Failed to create direct event for node %s: %v", nodeName, err)
+		} else {
+			log.Printf("Successfully created direct event for node %s", nodeName)
 		}
 	}
 }

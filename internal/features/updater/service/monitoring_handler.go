@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
 	"log"
@@ -91,6 +92,33 @@ func (h *monitoringHandler) OnEnter(ctx context.Context, status *domain.ControlP
 
 // OnExit is called when exiting the Monitoring state
 func (h *monitoringHandler) OnExit(ctx context.Context, status *domain.ControlPlaneStatus) (*domain.ControlPlaneStatus, error) {
-	// Nothing special to do on exit
-	return status, nil
+	log.Printf("DEBUG: MonitoringHandler.OnEnter called for node %s", status.NodeName)
+
+	newStatus := *status
+
+	// Record the event with detailed debugging
+	log.Printf("DEBUG: About to create event for node %s via NormalRecordWithNode", status.NodeName)
+
+	// Format parameters for logging
+	eventMsg := fmt.Sprintf("Node %s is now monitoring CPU utilization (current: %.2f%%, window avg: %.2f%%)",
+		status.NodeName,
+		status.CPUUtilization,
+		status.WindowAverageUtilization)
+	log.Printf("DEBUG: Event message will be: %s", eventMsg)
+
+	err := h.resourceFactory.Event().NormalRecordWithNode(
+		ctx,
+		"updater",
+		status.NodeName,
+		"MonitoringStarted",
+		eventMsg,
+	)
+
+	if err != nil {
+		log.Printf("ERROR: Failed to create event for node %s: %v", status.NodeName, err)
+	} else {
+		log.Printf("SUCCESS: Created event for node %s", status.NodeName)
+	}
+
+	return &newStatus, nil
 }

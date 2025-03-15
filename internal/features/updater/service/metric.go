@@ -1,4 +1,3 @@
-// metrics_component.go
 package service
 
 import (

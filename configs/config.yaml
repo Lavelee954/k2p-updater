@@ -53,7 +53,7 @@ resources:
       singular: "k2pupdater"
       kind: "K2pUpdater"
       name_format: "k2pupdater-%s"
-      cr_name: "master"
+      cr_name: "%s"
       status_field: "updates"
     upgrader:
       resource: "k2pupgraders"

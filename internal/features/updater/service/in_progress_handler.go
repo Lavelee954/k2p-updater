@@ -80,9 +80,11 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPl
 
 // OnEnter is called when entering the InProgressVmSpecUp state
 func (h *inProgressHandler) OnEnter(ctx context.Context, status *domain.ControlPlaneStatus) (*domain.ControlPlaneStatus, error) {
+	log.Printf("CRITICAL: OnEnter called for InProgressHandler - nodeName: %s", status.NodeName)
 	newStatus := *status
 
 	// Record the event
+	log.Printf("CRITICAL: About to call resourceFactory.Event().NormalRecordWithNode")
 	err := h.resourceFactory.Event().NormalRecordWithNode(
 		ctx,
 		"updater",
@@ -93,6 +95,7 @@ func (h *inProgressHandler) OnEnter(ctx context.Context, status *domain.ControlP
 		status.CPUUtilization,
 		status.WindowAverageUtilization,
 	)
+	log.Printf("CRITICAL: After calling NormalRecordWithNode, err: %v", err)
 
 	if err != nil {
 		log.Printf("Failed to record completion event for node %s: %v", status.NodeName, err)

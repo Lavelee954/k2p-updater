@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"log"
 	"net/http"
 	"os"
@@ -67,6 +69,7 @@ func NewServer(ctx context.Context) (*Server, error) {
 
 // Initialize sets up all required services and routes
 func (s *Server) Initialize(ctx context.Context) error {
+
 	log.Println("Initializing server components...")
 
 	// Create a context with timeout for initialization
@@ -113,6 +116,52 @@ func (s *Server) Initialize(ctx context.Context) error {
 	}
 	s.resourceFactory = factory
 	log.Println("Resource factory created successfully")
+
+	// After resource factory creation
+	log.Println("Testing direct event creation...")
+
+	// Create a direct test event to verify permissions and configuration
+	testEvent := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-event-" + time.Now().Format("20060102-150405"),
+			Namespace: s.cfg.Resources.Namespace,
+		},
+		InvolvedObject: corev1.ObjectReference{
+			Kind:       "Pod",
+			Namespace:  s.cfg.Resources.Namespace,
+			Name:       "test-reference",
+			APIVersion: "v1",
+		},
+		Reason:         "TestEvent",
+		Message:        "This is a test event to verify event creation",
+		Type:           corev1.EventTypeNormal,
+		FirstTimestamp: metav1.Now(),
+		LastTimestamp:  metav1.Now(),
+		Count:          1,
+		Source: corev1.EventSource{
+			Component: "k2p-updater",
+		},
+	}
+
+	_, err = s.kubeClients.ClientSet.CoreV1().Events(s.cfg.Resources.Namespace).Create(ctx, testEvent, metav1.CreateOptions{})
+	if err != nil {
+		log.Printf("CRITICAL: Failed to create test event: %v", err)
+	} else {
+		log.Printf("CRITICAL: Successfully created test event")
+	}
+
+	//// After resource factory creation
+	//log.Println("Testing factory event creation...")
+	//s.resourceFactory.CreateTestEvents(ctx)
+
+	// Check updater master resource exists
+	updaterResource, err := s.resourceFactory.GetResource(ctx, "updater", "k2pupdater-master")
+	if err != nil {
+		log.Printf("WARNING: k2pupdater-master resource not found: %v", err)
+		log.Printf("Events may not work correctly without this resource")
+	} else {
+		log.Printf("Found k2pupdater-master resource (UID: %s)", updaterResource.GetUID())
+	}
 
 	// 4. Initialize updater service
 	log.Println("Initializing updater service...")

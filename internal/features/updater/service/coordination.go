@@ -29,22 +29,36 @@ func NewCoordinationManager(stateMachine domain.StateMachine) *CoordinationManag
 
 // IsAnyNodeSpecingUp checks if any node is currently being spec'd up
 func (c *CoordinationManager) IsAnyNodeSpecingUp(ctx context.Context, nodes []string) (bool, string, error) {
+	// Add debug logging
+	log.Printf("Checking if any of %d nodes is currently spec'ing up", len(nodes))
+
 	c.mu.RLock()
 	if time.Since(c.lastUpdate) < c.cacheLifetime {
 		// Use cached data if recent
 		for nodeName, state := range c.statusCache {
 			if state == domain.StateInProgressVmSpecUp {
 				c.mu.RUnlock()
+				log.Printf("Found node %s in InProgressVmSpecUp state (cached)", nodeName)
 				return true, nodeName, nil
 			}
 		}
 		c.mu.RUnlock()
+		log.Printf("No nodes currently spec'ing up (cached data)")
 		return false, "", nil
 	}
 	c.mu.RUnlock()
 
 	// Cache is stale, refresh it
-	return c.refreshAndCheck(ctx, nodes)
+	result, node, err := c.refreshAndCheck(ctx, nodes)
+	if err != nil {
+		log.Printf("Error checking nodes status: %v", err)
+	} else if result {
+		log.Printf("Found node %s in InProgressVmSpecUp state (refreshed)", node)
+	} else {
+		log.Printf("No nodes currently spec'ing up (refreshed data)")
+	}
+
+	return result, node, err
 }
 
 // refreshAndCheck refreshes the state cache and checks for spec up
@@ -52,25 +66,47 @@ func (c *CoordinationManager) refreshAndCheck(ctx context.Context, nodes []strin
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Clear existing cache
-	c.statusCache = make(map[string]domain.State)
+	// Create new cache
+	newCache := make(map[string]domain.State)
 
-	// Refresh cache with current states
+	// Add debug logging
+	log.Printf("Refreshing state cache for %d nodes", len(nodes))
+
+	// First pass: look specifically for any node in InProgressVmSpecUp state
 	for _, nodeName := range nodes {
 		state, err := c.stateMachine.GetCurrentState(ctx, nodeName)
 		if err != nil {
 			log.Printf("Warning: Failed to get state for node %s: %v", nodeName, err)
+
+			// Use cached state if available
+			if prevState, exists := c.statusCache[nodeName]; exists {
+				newCache[nodeName] = prevState
+
+				// If cached state shows node in progress, return early
+				if prevState == domain.StateInProgressVmSpecUp {
+					log.Printf("Using cached state: node %s is in InProgressVmSpecUp", nodeName)
+					c.statusCache = newCache
+					c.lastUpdate = time.Now()
+					return true, nodeName, nil
+				}
+			}
 			continue
 		}
 
-		c.statusCache[nodeName] = state
+		// Store state in cache
+		newCache[nodeName] = state
 
+		// If this node is currently being spec'd up, return immediately
 		if state == domain.StateInProgressVmSpecUp {
+			log.Printf("Node %s is currently in InProgressVmSpecUp state", nodeName)
+			c.statusCache = newCache
 			c.lastUpdate = time.Now()
 			return true, nodeName, nil
 		}
 	}
 
+	// No node is being spec'd up
+	c.statusCache = newCache
 	c.lastUpdate = time.Now()
 	return false, "", nil
 }

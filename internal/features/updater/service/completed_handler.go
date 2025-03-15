@@ -77,25 +77,16 @@ func (h *completedHandler) OnEnter(ctx context.Context, status *domain.ControlPl
 		log.Printf("Successfully recorded completion event for node %s", status.NodeName)
 	}
 
-	// Automatically transition to cooldown state after completion
-	// This ensures we follow the requirements: CompletedVmSpecUp -> CoolDown
+	// Set cooldown parameters and directly transition to CoolDown state
 	cooldownPeriod := 10 * time.Minute // Set default cooldown period
-	cooldownEndTime := time.Now().Add(cooldownPeriod)
+	newStatus.CoolDownEndTime = time.Now().Add(cooldownPeriod)
+	newStatus.Message = fmt.Sprintf("VM spec up completed, entering cooldown period for %.1f minutes", cooldownPeriod.Minutes())
+	newStatus.CurrentState = domain.StateCoolDown
 
-	data := map[string]interface{}{
-		"coolDownEndTime": cooldownEndTime,
-		"cooldownPeriod":  cooldownPeriod,
-	}
+	log.Printf("Node %s directly transitioned to CoolDown state with cooldown period of %.1f minutes",
+		status.NodeName, cooldownPeriod.Minutes())
 
-	// Instead of trying to access the state machine directly, we'll handle it here
-	// Process the cooldown event directly in the OnEnter method
-	cooledDownStatus, err := h.Handle(ctx, &newStatus, domain.EventEnterCooldown, data)
-	if err != nil {
-		log.Printf("Failed to handle cooldown event: %v", err)
-		return &newStatus, nil
-	}
-
-	return cooledDownStatus, nil
+	return &newStatus, nil
 }
 
 // OnExit is called when exiting the CompletedVmSpecUp state

@@ -76,12 +76,21 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 	// Get or initialize node status
 	status, exists := sm.statusMap[nodeName]
 	if !exists {
-		// Initialize with default state
+		// Check if an initial state was provided in the data
+		initialState := domain.StatePendingVmSpecUp
+		if data != nil {
+			if state, ok := data["initialState"].(domain.State); ok && state != "" {
+				initialState = state
+				log.Printf("DEBUG: Using provided initial state %s for node %s", initialState, nodeName)
+			}
+		}
+
+		// Initialize with the determined state
 		status = &domain.ControlPlaneStatus{
 			NodeName:           nodeName,
-			CurrentState:       domain.StatePendingVmSpecUp,
+			CurrentState:       initialState,
 			LastTransitionTime: time.Now(),
-			Message:            "Initializing",
+			Message:            fmt.Sprintf("Initializing in %s state", initialState),
 		}
 		sm.statusMap[nodeName] = status
 		log.Printf("DEBUG: Initializing new node %s in state %s", nodeName, status.CurrentState)
@@ -89,7 +98,7 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 
 	// Record original state for metrics and logging
 	originalState := status.CurrentState
-	log.Printf("STATE MACHINE: Handling event originalState %s ", originalState)
+	log.Printf("STATE MACHINE: Current state before handling event: %s", originalState)
 
 	// Get current state handler
 	handler, exists := sm.stateHandlers[status.CurrentState]
@@ -107,10 +116,14 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 		return fmt.Errorf("error handling event %s in state %s: %w", event, status.CurrentState, err)
 	}
 
+	// Log the potential new state
+	log.Printf("DEBUG: After handler.Handle, potential new state is: %s (was %s)",
+		newStatus.CurrentState, status.CurrentState)
+
 	// If state has changed, perform transition
 	if newStatus.CurrentState != status.CurrentState {
-		log.Printf("DEBUG: State transition for node %s: %s -> %s",
-			nodeName, status.CurrentState, newStatus.CurrentState)
+		log.Printf("STATE TRANSITION: Node %s: %s -> %s triggered by event %s",
+			nodeName, status.CurrentState, newStatus.CurrentState, event)
 
 		// Call exit handler for the current state
 		exitHandler := sm.stateHandlers[status.CurrentState]
@@ -185,6 +198,7 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 
 	// Update status in map
 	sm.statusMap[nodeName] = newStatus
+	log.Printf("DEBUG: Final state after event handling: %s", newStatus.CurrentState)
 
 	// Update the custom resource status
 	if err := sm.updateCRStatus(ctx, nodeName, newStatus); err != nil {
@@ -243,7 +257,7 @@ func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, sta
 		"lastUpdateTime":       status.LastTransitionTime.Format(time.RFC3339),
 	}
 
-	// Always use "master" as the node name for the updater resource
+	// Use "k2pupdater-master" as the resource name (from the CR snippet we can see the name format)
 	err := sm.resourceFactory.Status().UpdateGenericWithNode(ctx, "updater", "master", statusData)
 	if err != nil {
 		log.Printf("Failed to update CR status for node %s: %v", nodeName, err)

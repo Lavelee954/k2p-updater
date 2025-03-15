@@ -60,6 +60,9 @@ func (s *NodeEventService) Start(ctx context.Context) error {
 
 		// Start background goroutine for periodic events with the background context
 		go s.eventCreationLoop(eventCtx)
+
+		// Add explicit confirmation that the goroutine is started
+		log.Println("Node event service background loop started")
 	})
 
 	return startErr
@@ -104,7 +107,6 @@ func (s *NodeEventService) eventCreationLoop(ctx context.Context) {
 	}
 }
 
-// createEventsForAllNodes creates events for all registered nodes
 func (s *NodeEventService) createEventsForAllNodes(ctx context.Context) {
 	s.nodesMutex.RLock()
 	nodes := make([]string, len(s.nodes))
@@ -113,21 +115,30 @@ func (s *NodeEventService) createEventsForAllNodes(ctx context.Context) {
 
 	log.Printf("Creating events for %d nodes", len(nodes))
 
+	// Track last event time per node to prevent too frequent updates
+	lastEventTimes := make(map[string]time.Time)
+
 	for _, nodeName := range nodes {
-		// Use a timeout context for each event creation
-		eventCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-
-		log.Printf("Processing node %s for event creation", nodeName)
-
-		// Get current node state with error handling
-		state, err := s.stateMachine.GetCurrentState(eventCtx, nodeName)
-		if err != nil {
-			log.Printf("Failed to get state for node %s: %v", nodeName, err)
-			state = domain.StatePendingVmSpecUp // Default state if error
+		// Limit event frequency - only create events every 60 seconds per node
+		now := time.Now()
+		if lastTime, exists := lastEventTimes[nodeName]; exists {
+			if now.Sub(lastTime) < 60*time.Second {
+				log.Printf("Skipping event for node %s - too soon since last event", nodeName)
+				continue
+			}
 		}
 
-		// Get current CPU metrics with error handling
+		// Update the last event time
+		lastEventTimes[nodeName] = now
+
+		// Get current node state with error handling
+		state, err := s.stateMachine.GetCurrentState(ctx, nodeName)
+		if err != nil {
+			log.Printf("Failed to get state for node %s: %v", nodeName, err)
+			continue
+		}
+
+		// Get current CPU metrics
 		currentCPU, windowAvg, err := s.metricsComponent.GetNodeCPUMetrics(nodeName)
 		if err != nil {
 			log.Printf("Failed to get CPU metrics for node %s: %v", nodeName, err)
@@ -135,12 +146,12 @@ func (s *NodeEventService) createEventsForAllNodes(ctx context.Context) {
 			windowAvg = 0
 		}
 
-		// Create event for this node
-		log.Printf("Creating periodic status event for node %s (state=%s, CPU=%.2f%%, window=%.2f%%)",
+		// Create a single status event for this node
+		log.Printf("Creating status event for node %s (state=%s, CPU=%.2f%%, window=%.2f%%)",
 			nodeName, state, currentCPU, windowAvg)
 
 		err = s.resourceFactory.Event().NormalRecordWithNode(
-			eventCtx,
+			ctx,
 			"updater",
 			nodeName,
 			"NodeStatus",
@@ -148,22 +159,17 @@ func (s *NodeEventService) createEventsForAllNodes(ctx context.Context) {
 			nodeName, state, currentCPU, windowAvg,
 		)
 
-		// Now also update the CR status
-		s.updateNodeStatusInCR(ctx, nodeName)
-
-		// Add a small delay between operations
-		time.Sleep(1 * time.Second)
-
 		if err != nil {
 			log.Printf("Failed to create event for node %s: %v", nodeName, err)
 		} else {
 			log.Printf("Successfully created status event for node %s", nodeName)
 		}
 
-		// Add a small delay between events to avoid rate limiting
+		// Add a small delay between events to avoid overwhelming the API
 		time.Sleep(1 * time.Second)
 	}
 }
+
 func (s *NodeEventService) verifyEventCreation(ctx context.Context) {
 	log.Println("Verifying event creation capability...")
 

@@ -28,7 +28,7 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 
 	switch event {
 	case domain.EventInitialize:
-		// Just update the message with remaining cooldown time
+		// Handle initialization event
 		if !newStatus.CoolDownEndTime.IsZero() {
 			remaining := time.Until(newStatus.CoolDownEndTime)
 			if remaining < 0 {
@@ -36,7 +36,45 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 			}
 			newStatus.Message = fmt.Sprintf("In cooldown period, %.1f minutes remaining",
 				remaining.Minutes())
+
+			// Log that we're in CoolDown state
+			log.Printf("INIT: Node %s initialized in CoolDown state until %s (%.1f minutes remaining)",
+				status.NodeName, newStatus.CoolDownEndTime.Format(time.RFC3339), remaining.Minutes())
+		} else if data != nil && data["coolDownEndTime"] != nil {
+			// If cooldown end time is provided in the data, use it
+			if endTime, ok := data["coolDownEndTime"].(time.Time); ok {
+				newStatus.CoolDownEndTime = endTime
+				remaining := time.Until(endTime)
+				if remaining < 0 {
+					remaining = 0
+				}
+				newStatus.Message = fmt.Sprintf("In cooldown period, %.1f minutes remaining",
+					remaining.Minutes())
+
+				log.Printf("INIT: Node %s initialized with cooldown end time %s (%.1f minutes remaining)",
+					status.NodeName, endTime.Format(time.RFC3339), remaining.Minutes())
+			}
+		} else {
+			// Default cooldown period
+			cooldownPeriod := 5 * time.Minute
+			newStatus.CoolDownEndTime = time.Now().Add(cooldownPeriod)
+			newStatus.Message = fmt.Sprintf("In cooldown period, %.1f minutes remaining",
+				cooldownPeriod.Minutes())
+
+			log.Printf("INIT: Node %s initialized with default cooldown period of %.1f minutes",
+				status.NodeName, cooldownPeriod.Minutes())
 		}
+
+		// Update CPU metrics if available
+		if data != nil {
+			if cpu, ok := data["cpuUtilization"].(float64); ok {
+				newStatus.CPUUtilization = cpu
+			}
+			if windowAvg, ok := data["windowAverageUtilization"].(float64); ok {
+				newStatus.WindowAverageUtilization = windowAvg
+			}
+		}
+
 		return &newStatus, nil
 
 	case domain.EventCooldownStatus:
@@ -60,12 +98,36 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 			}
 		}
 
+		// Update the last transition time to ensure the CR message gets updated
+		newStatus.LastTransitionTime = time.Now()
+
+		// Log the status update
+		log.Printf("COOLDOWN STATUS: Node %s cooldown status updated: %.1f minutes remaining, CPU: %.2f%%, Avg: %.2f%%",
+			status.NodeName,
+			time.Until(newStatus.CoolDownEndTime).Minutes(),
+			newStatus.CPUUtilization,
+			newStatus.WindowAverageUtilization)
+
+		// Create a status message event as well
+		h.resourceFactory.Event().NormalRecordWithNode(
+			ctx,
+			"updater",
+			status.NodeName,
+			"CooldownStatus",
+			"Node %s cooldown update: %.1f minutes remaining, CPU: %.2f%%, Avg: %.2f%%",
+			status.NodeName,
+			time.Until(newStatus.CoolDownEndTime).Minutes(),
+			newStatus.CPUUtilization,
+			newStatus.WindowAverageUtilization,
+		)
+
 		return &newStatus, nil
 
 	case domain.EventCooldownEnded:
-		// Transition to PendingVmSpecUp when cooldown ends
-		newStatus.CurrentState = domain.StatePendingVmSpecUp
-		newStatus.Message = "Cooldown period ended, ready for next spec up cycle"
+		// Transition DIRECTLY to Monitoring state when cooldown ends
+		// Skip the PendingVmSpecUp state completely to avoid race conditions
+		newStatus.CurrentState = domain.StateMonitoring
+		newStatus.Message = "Cooldown period ended, now monitoring CPU utilization"
 
 		// Record CPU metrics if available
 		if data != nil {
@@ -76,6 +138,9 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 				newStatus.WindowAverageUtilization = windowAvg
 			}
 		}
+
+		log.Printf("COOLDOWN ENDED: Node %s transitioning directly from CoolDown to Monitoring",
+			status.NodeName)
 
 		return &newStatus, nil
 	}

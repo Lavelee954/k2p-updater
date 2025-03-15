@@ -6,6 +6,7 @@ import (
 	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
 	"log"
+	"time"
 )
 
 // monitoringHandler handles the Monitoring state
@@ -25,8 +26,11 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *domain.ControlPl
 	// Create a copy of the status to work with
 	newStatus := *status
 
+	log.Printf("MONITORING HANDLER: Processing event %s for node %s", event, status.NodeName)
+
 	switch event {
 	case domain.EventThresholdExceeded:
+		log.Printf("MONITORING HANDLER: CPU threshold exceeded for node %s, transitioning to InProgressVmSpecUp", status.NodeName)
 		// Transition to InProgressVmSpecUp when CPU threshold is exceeded
 		newStatus.CurrentState = domain.StateInProgressVmSpecUp
 		newStatus.Message = "CPU threshold exceeded, initiating VM spec up"
@@ -35,15 +39,18 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *domain.ControlPl
 		if data != nil {
 			if cpu, ok := data["cpuUtilization"].(float64); ok {
 				newStatus.CPUUtilization = cpu
+				log.Printf("MONITORING HANDLER: CPU utilization for node %s: %.2f%%", status.NodeName, cpu)
 			}
 			if windowAvg, ok := data["windowAverageUtilization"].(float64); ok {
 				newStatus.WindowAverageUtilization = windowAvg
+				log.Printf("MONITORING HANDLER: Window average for node %s: %.2f%%", status.NodeName, windowAvg)
 			}
 		}
 
 		return &newStatus, nil
 
 	case domain.EventInitialize:
+		log.Printf("MONITORING HANDLER: Initialize event for node %s, staying in Monitoring state", status.NodeName)
 		// Stay in Monitoring state, update metrics
 		newStatus.Message = "Monitoring CPU utilization"
 
@@ -51,27 +58,41 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *domain.ControlPl
 		if data != nil {
 			if cpu, ok := data["cpuUtilization"].(float64); ok {
 				newStatus.CPUUtilization = cpu
+				log.Printf("MONITORING HANDLER: CPU utilization for node %s: %.2f%%", status.NodeName, cpu)
 			}
 			if windowAvg, ok := data["windowAverageUtilization"].(float64); ok {
 				newStatus.WindowAverageUtilization = windowAvg
+				log.Printf("MONITORING HANDLER: Window average for node %s: %.2f%%", status.NodeName, windowAvg)
 			}
 		}
 
 		return &newStatus, nil
 
 	case domain.EventMonitoringStatus:
+		log.Printf("MONITORING HANDLER: Status update event for node %s", status.NodeName)
 		// Update monitoring status with current CPU metrics
 		if data != nil {
 			if cpu, ok := data["cpuUtilization"].(float64); ok {
 				newStatus.CPUUtilization = cpu
+				log.Printf("MONITORING HANDLER: CPU utilization for node %s: %.2f%%", status.NodeName, cpu)
 			}
 			if windowAvg, ok := data["windowAverageUtilization"].(float64); ok {
 				newStatus.WindowAverageUtilization = windowAvg
+				log.Printf("MONITORING HANDLER: Window average for node %s: %.2f%%", status.NodeName, windowAvg)
 			}
 		}
 
 		// Update message with current CPU utilization
 		newStatus.Message = fmt.Sprintf("Monitoring CPU utilization: current %.2f%%, window avg %.2f%%",
+			newStatus.CPUUtilization,
+			newStatus.WindowAverageUtilization)
+
+		// Update the last transition time to ensure the CR message gets updated
+		newStatus.LastTransitionTime = time.Now()
+
+		// Log the status update
+		log.Printf("MONITORING STATUS: Node %s monitoring status updated: CPU: %.2f%%, Avg: %.2f%%",
+			status.NodeName,
 			newStatus.CPUUtilization,
 			newStatus.WindowAverageUtilization)
 
@@ -88,6 +109,8 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *domain.ControlPl
 		)
 
 		return &newStatus, nil
+	default:
+		log.Printf("MONITORING HANDLER: Unhandled event %s for node %s, no state change", event, status.NodeName)
 	}
 
 	// Default: no state change

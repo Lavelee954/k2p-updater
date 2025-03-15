@@ -24,8 +24,11 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPl
 	// Create a copy of the status to work with
 	newStatus := *status
 
+	log.Printf("IN_PROGRESS HANDLER: Processing event %s for node %s", event, status.NodeName)
+
 	switch event {
 	case domain.EventSpecUpRequested:
+		log.Printf("IN_PROGRESS HANDLER: Spec up requested for node %s", status.NodeName)
 		// Update status to indicate spec up was requested successfully
 		newStatus.SpecUpRequested = true
 		newStatus.Message = "VM spec up request sent to backend successfully"
@@ -34,18 +37,21 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPl
 		if data != nil {
 			if cpu, ok := data["cpuUtilization"].(float64); ok {
 				newStatus.CPUUtilization = cpu
+				log.Printf("IN_PROGRESS HANDLER: CPU utilization for node %s: %.2f%%", status.NodeName, cpu)
 			}
 		}
 
 		return &newStatus, nil
 
 	case domain.EventSpecUpCompleted:
+		log.Printf("IN_PROGRESS HANDLER: Spec up completed for node %s, waiting for health check", status.NodeName)
 		// Backend says spec up is complete, now waiting for health check
 		newStatus.SpecUpCompleted = true
 		newStatus.Message = "VM spec up completed, performing health check"
 		return &newStatus, nil
 
 	case domain.EventHealthCheckPassed:
+		log.Printf("IN_PROGRESS HANDLER: Health check passed for node %s, transitioning to CompletedVmSpecUp", status.NodeName)
 		// When health check passes, transition to completed state
 		newStatus.CurrentState = domain.StateCompletedVmSpecUp
 		newStatus.HealthCheckPassed = true
@@ -53,6 +59,7 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPl
 		return &newStatus, nil
 
 	case domain.EventHealthCheckFailed:
+		log.Printf("IN_PROGRESS HANDLER: Health check failed for node %s, transitioning to FailedVmSpecUp", status.NodeName)
 		// When health check fails, transition to failed state
 		newStatus.CurrentState = domain.StateFailedVmSpecUp
 		newStatus.HealthCheckPassed = false
@@ -60,6 +67,7 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPl
 		return &newStatus, nil
 
 	case domain.EventSpecUpFailed:
+		log.Printf("IN_PROGRESS HANDLER: Spec up failed for node %s, transitioning to FailedVmSpecUp", status.NodeName)
 		// When spec up process fails for any reason
 		newStatus.CurrentState = domain.StateFailedVmSpecUp
 		newStatus.Message = "VM spec up failed"
@@ -68,10 +76,13 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPl
 		if data != nil {
 			if errMsg, ok := data["error"].(string); ok {
 				newStatus.Message = "VM spec up failed: " + errMsg
+				log.Printf("IN_PROGRESS HANDLER: Failure reason for node %s: %s", status.NodeName, errMsg)
 			}
 		}
 
 		return &newStatus, nil
+	default:
+		log.Printf("IN_PROGRESS HANDLER: Unhandled event %s for node %s, no state change", event, status.NodeName)
 	}
 
 	// Default: no state change for other events

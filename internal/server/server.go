@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"k2p-updater/cmd/app"
@@ -94,15 +93,6 @@ func (s *Server) Initialize(ctx context.Context) error {
 		return fmt.Errorf("failed to create resource factory: %w", err)
 	}
 	s.resourceFactory = factory
-
-	// 5. Setup HTTP server
-	s.httpServer = &http.Server{
-		Addr:         s.cfg.Server.Port,
-		Handler:      setupRoutes(s.exporterSvc, s.metricsSvc),
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  120 * time.Second,
-	}
 
 	return nil
 }
@@ -240,67 +230,4 @@ func convertResourceDefinitions(appDefs map[string]app.ResourceDefinitionConfig)
 	}
 
 	return resourceDefs
-}
-
-// setupRoutes configures the HTTP routes for the application
-func setupRoutes(exporterProvider domain.Provider, metricsProvider interface{}) http.Handler {
-	mux := http.NewServeMux()
-	handler := &HTTPHandler{
-		exporterProvider: exporterProvider,
-		metricsProvider:  metricsProvider,
-	}
-
-	// Health check endpoint
-	mux.HandleFunc("/health", handler.HealthHandler)
-
-	// Status endpoint - shows exporters info
-	mux.HandleFunc("/status", handler.StatusHandler)
-
-	// Metrics endpoint
-	mux.HandleFunc("/metrics", handler.MetricsHandler)
-
-	return mux
-}
-
-// HTTPHandler encapsulates the HTTP handlers
-type HTTPHandler struct {
-	exporterProvider domain.Provider
-	metricsProvider  interface{}
-}
-
-// HealthHandler handles health check requests
-func (h *HTTPHandler) HealthHandler(w http.ResponseWriter, r *http.Request) {
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("OK"))
-}
-
-// StatusHandler handles status check requests
-func (h *HTTPHandler) StatusHandler(w http.ResponseWriter, r *http.Request) {
-	exporters := h.exporterProvider.GetHealthyExporters()
-	w.Header().Set("Content-Type", "application/json")
-
-	// Create a proper response structure
-	response := struct {
-		Status           string                `json:"status"`
-		HealthyExporters int                   `json:"healthy_exporters"`
-		Exporters        []domain.NodeExporter `json:"exporters"`
-	}{
-		Status:           "running",
-		HealthyExporters: len(exporters),
-		Exporters:        exporters,
-	}
-
-	// Use proper JSON encoding
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Error encoding status response: %v", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-}
-
-// MetricsHandler handles metrics requests
-func (h *HTTPHandler) MetricsHandler(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "text/plain")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("# Metrics endpoint - Prometheus format metrics would be here\n"))
 }

@@ -3,52 +3,77 @@ package resource
 import (
 	"context"
 	"fmt"
-	"k2p-updater/cmd/app"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/dynamic"
 )
+
+// ResourceDefinition is a structure that holds a resource definition configuration
+type ResourceDefinition struct {
+	Resource    string
+	NameFormat  string
+	StatusField interface{}
+	Kind        string
+	CRName      string
+}
+
+// GetStatusFieldString returns the StatusField as a string
+func (rd *ResourceDefinition) GetStatusFieldString() (string, bool) {
+	if field, ok := rd.StatusField.(string); ok {
+		return field, true
+	}
+	return "", false
+}
 
 // Factory creates and manages resource handlers
 type Factory struct {
-	config         *app.Config
-	kubeClients    *app.KubeClients
+	namespace      string
+	group          string
+	version        string
+	definitions    map[string]ResourceDefinition
+	dynamicClient  dynamic.Interface
+	clientSet      KubeClientInterface
 	sharedTemplate *Template
 	eventHandler   Event
 	statusHandler  Status
 	helpers        *Helpers
 }
 
-// NewFactory creates a factory for resource handlers
-func NewFactory(config *app.Config, clients *app.KubeClients) (*Factory, error) {
-	// Create the shared template once
-	template, err := convertToTemplate(config)
+// NewFactory creates a factory for the resource handler
+func NewFactory(namespace, group, version string, definitions map[string]ResourceDefinition, dynamicClient dynamic.Interface, clientSet KubeClientInterface) (*Factory, error) {
+	// 공유 템플릿을 한 번만 생성
+	template, err := convertToTemplate(namespace, group, version, definitions)
 	if err != nil {
 		return nil, err
 	}
 
-	// Create helpers
+	// 헬퍼 생성
 	helpers := &Helpers{
-		DynamicClient: clients.DynamicClient,
+		DynamicClient: dynamicClient,
 		Template:      template,
 	}
 
-	// Create event handler
+	// 이벤트 핸들러 생성
 	eventHandler := &EventInfo{
 		Template:      template,
-		KubeClient:    clients.ClientSet,
-		DynamicClient: clients.DynamicClient,
+		KubeClient:    clientSet,
+		DynamicClient: dynamicClient,
 	}
 
-	// Create status handler
+	// 상태 핸들러 생성
 	statusHandler := &StatusInfo{
 		Template:      template,
-		DynamicClient: clients.DynamicClient,
+		DynamicClient: dynamicClient,
 	}
 
 	return &Factory{
-		config:         config,
-		kubeClients:    clients,
+		namespace:      namespace,
+		group:          group,
+		version:        version,
+		definitions:    definitions,
+		dynamicClient:  dynamicClient,
+		clientSet:      clientSet,
 		sharedTemplate: template,
 		eventHandler:   eventHandler,
 		statusHandler:  statusHandler,
@@ -56,12 +81,12 @@ func NewFactory(config *app.Config, clients *app.KubeClients) (*Factory, error) 
 	}, nil
 }
 
-// Event returns the event handler
+// Event returns an event handler
 func (f *Factory) Event() Event {
 	return f.eventHandler
 }
 
-// Status returns the status handler
+// Status returns a status handler
 func (f *Factory) Status() Status {
 	return f.statusHandler
 }
@@ -75,7 +100,7 @@ func (f *Factory) GetResource(ctx context.Context, resourceKey, name string) (*u
 
 	resource := f.sharedTemplate.Key[resourceKey]
 
-	return f.kubeClients.DynamicClient.Resource(gvr).
+	return f.dynamicClient.Resource(gvr).
 		Namespace(resource.namespace).
 		Get(ctx, name, metav1.GetOptions{})
 }
@@ -112,29 +137,28 @@ func (f *Factory) CreateResource(ctx context.Context, resourceKey string, spec m
 		},
 	}
 
-	_, err = f.kubeClients.DynamicClient.Resource(gvr).
+	_, err = f.dynamicClient.Resource(gvr).
 		Namespace(resource.namespace).
 		Create(ctx, obj, metav1.CreateOptions{})
 	return err
 }
 
-// createTemplate converts app configuration to a resource template
-// Private method as it's an implementation detail
-func convertToTemplate(config *app.Config) (*Template, error) {
+// convertToTemplate converts a direct parameter to a resource template
+func convertToTemplate(namespace, group, version string, definitions map[string]ResourceDefinition) (*Template, error) {
 	template := &Template{
 		Key: make(map[string]Resource),
 	}
 
 	// Process each resource definition
-	for key, definition := range config.Resources.Definitions {
+	for key, definition := range definitions {
 		res := Resource{
-			namespace:  config.Resources.Namespace,
-			group:      config.Resources.Group,
-			version:    config.Resources.Version,
+			namespace:  namespace,
+			group:      group,
+			version:    version,
 			definition: map[string]Definition{},
 		}
 
-		// Create the definition
+		// Create a definition
 		def := Definition{
 			NameFormat:  definition.NameFormat,
 			Resource:    definition.Resource,
@@ -143,18 +167,18 @@ func convertToTemplate(config *app.Config) (*Template, error) {
 			StatusField: make(map[interface{}]interface{}),
 		}
 
-		// Handle status field which can be a string or map
+		// StatusField can be a string or map
 		if statusFieldStr, ok := definition.GetStatusFieldString(); ok {
 			def.StatusField = map[interface{}]interface{}{
 				"field": statusFieldStr,
 			}
 		} else if statusMap, ok := definition.StatusField.(map[string]interface{}); ok {
-			// Convert string map to interface map
+			// Convert a string map to an interface map
 			for k, v := range statusMap {
 				def.StatusField[k] = v
 			}
 		} else {
-			return nil, fmt.Errorf("invalid status field type for resource %s", key)
+			return nil, fmt.Errorf("리소스 %s의 유효하지 않은 상태 필드 타입", key)
 		}
 
 		res.definition[key] = def

@@ -63,8 +63,11 @@ func TestStateMachineInitialization(t *testing.T) {
 	// Create a mock resource factory
 	mockFactory := &mockResourceFactory{}
 
-	// Create state machine
-	sm := NewStateMachine(mockFactory)
+	// Create a mock metrics collector
+	mockMetrics := NewMockMetricsCollector()
+
+	// Create state machine with both mocks
+	sm := NewStateMachine(mockFactory, mockMetrics)
 
 	// Test node status initialization
 	ctx := context.Background()
@@ -228,4 +231,32 @@ func TestFailureAndRecovery(t *testing.T) {
 	if state != domain.StatePendingVmSpecUp {
 		t.Errorf("Expected state %s after recovery, got %s", domain.StatePendingVmSpecUp, state)
 	}
+}
+
+// mockMetricsCollector implements minimal functionality for testing
+type mockMetricsCollector struct{}
+
+func NewMockMetricsCollector() *mockMetricsCollector {
+	return &mockMetricsCollector{}
+}
+
+// Implementation of all the required methods with empty bodies
+func (m *mockMetricsCollector) RecordTransitionLatency(nodeName string, fromState, toState domain.State, durationSeconds float64) {
+	// No-op for testing
+}
+
+func (m *mockMetricsCollector) UpdateNodeState(nodeName string, oldState, newState domain.State) {
+	// No-op for testing
+}
+
+func (m *mockMetricsCollector) UpdateCPUMetrics(nodeName string, current, windowAvg float64) {
+	// No-op for testing
+}
+
+func (m *mockMetricsCollector) Register() {
+	// No-op for testing
+}
+
+func (m *mockMetricsCollector) RecordRecoveryAttempt(nodeName string, successful bool) {
+	// No-op for testing
 }

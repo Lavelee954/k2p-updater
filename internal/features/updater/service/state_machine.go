@@ -30,12 +30,16 @@ type stateMachine struct {
 }
 
 // NewStateMachine creates a new state machine
-func NewStateMachine(resourceFactory *resource.Factory, metricsCollector *MetricsCollector) domain.StateMachine {
+func NewStateMachine(resourceFactory *resource.Factory, metricsCollector ...*MetricsCollector) domain.StateMachine {
 	sm := &stateMachine{
-		statusMap:        make(map[string]*domain.ControlPlaneStatus),
-		stateHandlers:    make(map[domain.State]domain.StateHandler),
-		resourceFactory:  resourceFactory,
-		metricsCollector: metricsCollector,
+		statusMap:       make(map[string]*domain.ControlPlaneStatus),
+		stateHandlers:   make(map[domain.State]domain.StateHandler),
+		resourceFactory: resourceFactory,
+	}
+
+	// Assign metrics collector if provided
+	if len(metricsCollector) > 0 && metricsCollector[0] != nil {
+		sm.metricsCollector = metricsCollector[0]
 	}
 
 	// Register state handlers

@@ -149,24 +149,6 @@ func (s *NodeEventService) createEventsForAllNodes(ctx context.Context) {
 		// Create a single status event for this node
 		log.Printf("Creating status event for node %s (state=%s, CPU=%.2f%%, window=%.2f%%)",
 			nodeName, state, currentCPU, windowAvg)
-
-		err = s.resourceFactory.Event().NormalRecordWithNode(
-			ctx,
-			"updater",
-			nodeName,
-			"NodeStatus",
-			"Node %s status: state=%s, CPU=%.2f%%, window=%.2f%%",
-			nodeName, state, currentCPU, windowAvg,
-		)
-
-		if err != nil {
-			log.Printf("Failed to create event for node %s: %v", nodeName, err)
-		} else {
-			log.Printf("Successfully created status event for node %s", nodeName)
-		}
-
-		// Add a small delay between events to avoid overwhelming the API
-		time.Sleep(1 * time.Second)
 	}
 }
 

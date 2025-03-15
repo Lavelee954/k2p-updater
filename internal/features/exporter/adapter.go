@@ -2,6 +2,7 @@ package exporter
 
 import (
 	"context"
+	"fmt"
 
 	"k2p-updater/cmd/app"
 	"k2p-updater/internal/features/exporter/domain"
@@ -10,18 +11,18 @@ import (
 
 // NewProvider creates and initializes a new exporter provider.
 func NewProvider(ctx context.Context, config *app.ExporterConfig, kubeClient app.KubeClientInterface) (domain.Provider, error) {
-	// Create a Kubernetes client for the domain interface
+	// Create domain-compatible Kubernetes client
 	domainClient := service.NewKubernetesClient(kubeClient.CoreV1())
 
-	// 서비스 생성 및 시작
+	// Create and start the service
 	exporterService := service.NewService(domainClient, config)
 
 	if err := exporterService.Start(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to start exporter service: %w", err)
 	}
 
 	if err := exporterService.WaitForInitialization(ctx); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("exporter service initialization timed out: %w", err)
 	}
 
 	return exporterService, nil
@@ -33,7 +34,7 @@ func NewVMHealthVerifier(
 	exporterService domain.Provider,
 	config *app.ExporterConfig,
 ) domain.VMHealthVerifier {
-	// Create a Kubernetes client for the domain interface
+	// Create domain-compatible Kubernetes client
 	domainClient := service.NewKubernetesClient(kubeClient.CoreV1())
 
 	verifierConfig := service.NewVMHealthVerifierConfig(config)

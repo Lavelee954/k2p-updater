@@ -13,16 +13,19 @@ import (
 	"k8s.io/client-go/util/homedir"
 )
 
-// KubeClientInterface는 Kubernetes 클라이언트셋의 필요한 메서드만 정의한 인터페이스입니다.
-// 이 인터페이스는 실제 clientset과 fake clientset 모두 구현합니다.
+// KubeClientInterface is an interface that defines only the necessary methods of a Kubernetes clientset.
+// This interface implements both real clientsets and fake clientsets.
 type KubeClientInterface interface {
 	CoreV1() typedcorev1.CoreV1Interface
 }
 
 // KubeClients holds the Kubernetes client instances.
 type KubeClients struct {
-	// ClientSet is the Kubernetes clientset
+	// ClientSet is the Kubernetes clientset that implements KubeClientInterface
 	ClientSet KubeClientInterface
+
+	// FullClientSet is the complete Kubernetes clientset
+	FullClientSet kubernetes.Interface
 
 	// DynamicClient is the Kubernetes dynamic client
 	DynamicClient dynamic.Interface
@@ -53,6 +56,7 @@ func NewKubeClients(cfg *KubernetesConfig) (*KubeClients, error) {
 
 	return &KubeClients{
 		ClientSet:     clientset,
+		FullClientSet: clientset, // Store the full clientset as well
 		DynamicClient: dynamicClient,
 		Config:        config,
 	}, nil

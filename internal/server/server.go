@@ -9,8 +9,6 @@ import (
 	"k2p-updater/internal/features/exporter/domain"
 	"k2p-updater/internal/features/metric"
 	domainMetric "k2p-updater/internal/features/metric/domain"
-	"k2p-updater/internal/handlers"
-	"k2p-updater/internal/middleware"
 	"k2p-updater/pkg/resource"
 	"log"
 	"net/http"
@@ -104,29 +102,29 @@ func (s *Server) Initialize(ctx context.Context) error {
 	}
 	s.resourceFactory = factory
 
-	// 5. Setup HTTP routes and handler
-	if err := s.setupRoutes(); err != nil {
-		return fmt.Errorf("failed to setup HTTP routes: %w", err)
-	}
+	//// 5. Setup HTTP routes and handler
+	//if err := s.setupRoutes(); err != nil {
+	//	return fmt.Errorf("failed to setup HTTP routes: %w", err)
+	//}
 
 	return nil
 }
 
 // setupRoutes configures all HTTP routes and handler
-func (s *Server) setupRoutes() error {
-	// Add common middleware
-	s.router.Use(middleware.LoggingMiddleware())
-
-	// Create and register health handler
-	healthHandler := handlers.NewHealthHandler()
-	healthHandler.SetupRoutes(s.router)
-
-	// Add other handler as needed
-	// Example: statusHandler := handler.NewStatusHandler(s.updaterService)
-	//          statusHandler.SetupRoutes(s.router)
-
-	return nil
-}
+//func (s *Server) setupRoutes() error {
+//	// Add common middleware
+//	s.router.Use(middleware.LoggingMiddleware())
+//
+//	// Create and register health handler
+//	healthHandler := handlers.NewHealthHandler()
+//	healthHandler.SetupRoutes(s.router)
+//
+//	// Add other handler as needed
+//	// Example: statusHandler := handler.NewStatusHandler(s.updaterService)
+//	//          statusHandler.SetupRoutes(s.router)
+//
+//	return nil
+//}
 
 // Start begins the server operation and handles graceful shutdown
 func (s *Server) Start(ctx context.Context) error {

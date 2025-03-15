@@ -4,14 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"k2p-updater/cmd/app"
-	"k2p-updater/internal/features/exporter"
-	"k2p-updater/internal/features/exporter/domain"
-	"k2p-updater/internal/features/metric"
-	domainMetric "k2p-updater/internal/features/metric/domain"
-	"k2p-updater/internal/features/updater"
-	updaterDomain "k2p-updater/internal/features/updater/domain"
-	"k2p-updater/pkg/resource"
 	"log"
 	"net/http"
 	"os"
@@ -20,6 +12,16 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"k2p-updater/cmd/app"
+	"k2p-updater/internal/api/v1/handler"
+	"k2p-updater/internal/api/v1/middleware"
+	"k2p-updater/internal/features/exporter"
+	"k2p-updater/internal/features/exporter/domain"
+	"k2p-updater/internal/features/metric"
+	domainMetric "k2p-updater/internal/features/metric/domain"
+	"k2p-updater/internal/features/updater"
+	updaterDomain "k2p-updater/internal/features/updater/domain"
+	"k2p-updater/pkg/resource"
 )
 
 // Server encapsulates the application server functionality
@@ -34,21 +36,26 @@ type Server struct {
 	router          *gin.Engine
 }
 
-// NewServer creates a new server instance
+// NewServer creates a new server instance with all dependencies initialized.
 func NewServer(ctx context.Context) (*Server, error) {
-	// 1. Load configuration
+	// Load configuration
 	cfg, err := app.Load()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load configuration: %w", err)
 	}
 
-	// 2. Create Kubernetes clients
+	// Create Kubernetes clients
 	kubeClients, err := app.NewKubeClients(&cfg.Kubernetes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Kubernetes clients: %w", err)
 	}
 
-	// 3. Setup Gin router
+	// Set up Gin router with appropriate mode
+	if cfg.App.LogLevel == "debug" {
+		gin.SetMode(gin.DebugMode)
+	} else {
+		gin.SetMode(gin.ReleaseMode)
+	}
 	router := gin.Default()
 
 	return &Server{
@@ -58,8 +65,10 @@ func NewServer(ctx context.Context) (*Server, error) {
 	}, nil
 }
 
-// Initialize sets up all required services
+// Initialize sets up all required services and routes
 func (s *Server) Initialize(ctx context.Context) error {
+	log.Println("Initializing server components...")
+
 	// Create a context with timeout for initialization
 	initCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
@@ -76,7 +85,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 	log.Println("Exporter service initialized successfully")
 	s.exporterSvc = exporterProvider
 
-	// 2. Initialize metrics service - Use FullClientSet instead of ClientSet
+	// 2. Initialize metrics service
 	log.Println("Initializing metrics service...")
 	metricsCtx, metricsCancel := context.WithTimeout(initCtx, 30*time.Second)
 	defer metricsCancel()
@@ -88,10 +97,9 @@ func (s *Server) Initialize(ctx context.Context) error {
 	log.Println("Metrics service initialized successfully")
 	s.metricsSvc = metricsProvider
 
-	// 3. Convert resource definitions for the factory
+	// 3. Create resource factory
+	log.Println("Creating resource factory...")
 	resourceDefs := convertResourceDefinitions(s.cfg.Resources.Definitions)
-
-	// 4. Create resource factory
 	factory, err := resource.NewFactory(
 		s.cfg.Resources.Namespace,
 		s.cfg.Resources.Group,
@@ -104,8 +112,9 @@ func (s *Server) Initialize(ctx context.Context) error {
 		return fmt.Errorf("failed to create resource factory: %w", err)
 	}
 	s.resourceFactory = factory
+	log.Println("Resource factory created successfully")
 
-	// 5. Initialize updater service
+	// 4. Initialize updater service
 	log.Println("Initializing updater service...")
 	updaterCtx, updaterCancel := context.WithTimeout(initCtx, 30*time.Second)
 	defer updaterCancel()
@@ -124,29 +133,38 @@ func (s *Server) Initialize(ctx context.Context) error {
 	log.Println("Updater service initialized successfully")
 	s.updaterSvc = updaterProvider
 
-	//// 6. Setup HTTP routes and handler
-	//if err := s.setupRoutes(); err != nil {
-	//	return fmt.Errorf("failed to setup HTTP routes: %w", err)
-	//}
+	// 5. Setup HTTP routes and handlers
+	if err := s.setupRoutes(); err != nil {
+		return fmt.Errorf("failed to setup HTTP routes: %w", err)
+	}
+	log.Println("HTTP routes configured successfully")
 
 	return nil
 }
 
-// setupRoutes configures all HTTP routes and handler
-//func (s *Server) setupRoutes() error {
-//	// Add common middleware
-//	s.router.Use(middleware.LoggingMiddleware())
-//
-//	// Create and register health handler
-//	healthHandler := handlers.NewHealthHandler()
-//	healthHandler.SetupRoutes(s.router)
-//
-//	// Add other handler as needed
-//	// Example: statusHandler := handler.NewStatusHandler(s.updaterService)
-//	//          statusHandler.SetupRoutes(s.router)
-//
-//	return nil
-//}
+// setupRoutes configures all HTTP routes and handlers
+func (s *Server) setupRoutes() error {
+	// Add common middleware
+	s.router.Use(middleware.LoggingMiddleware())
+
+	// Create and register health handler
+	healthHandler := handler.NewHealthHandler()
+	healthHandler.SetupRoutes(s.router)
+
+	// Create and register status handler
+	statusHandler := handler.NewStatusHandler(s.updaterSvc)
+	statusHandler.SetupRoutes(s.router)
+
+	// Add prometheus metrics endpoint
+	// s.router.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
+	// Add swagger documentation if in development mode
+	if s.cfg.App.LogLevel == "debug" {
+		// s.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
+	}
+
+	return nil
+}
 
 // Start begins the server operation and handles graceful shutdown
 func (s *Server) Start(ctx context.Context) error {
@@ -155,18 +173,26 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Create HTTP server with the Gin router
 	s.httpServer = &http.Server{
-		Addr:    s.cfg.Server.Port,
-		Handler: s.router,
+		Addr:         s.cfg.Server.Port,
+		Handler:      s.router,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	// Start HTTP server in background
 	serverErrCh := make(chan error, 1)
 	go func() {
-		log.Printf("Starting HTTP server on %s", s.cfg.Server.Port)
+		log.Printf("HTTP server listening on %s", s.cfg.Server.Port)
 		if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErrCh <- fmt.Errorf("HTTP server error: %w", err)
 		}
 	}()
+
+	// Start background processing for updater service
+	if err := s.updaterSvc.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start updater service: %w", err)
+	}
 
 	// Wait for either server error or context cancellation
 	select {
@@ -174,20 +200,28 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	case <-ctx.Done():
 		log.Println("Shutdown initiated, gracefully stopping services...")
+		return nil
 	}
-
-	return nil
 }
 
-// Shutdown performs graceful shutdown of the server
+// Shutdown performs graceful shutdown of the server and all services
 func (s *Server) Shutdown() error {
+	log.Println("Performing graceful shutdown...")
+
+	// Create a context with timeout for shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), s.cfg.Server.ShutdownTimeout)
 	defer shutdownCancel()
 
 	// Shutdown HTTP server
-	if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("HTTP server shutdown error: %w", err)
+	if s.httpServer != nil {
+		log.Println("Shutting down HTTP server...")
+		if err := s.httpServer.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("HTTP server shutdown error: %w", err)
+		}
 	}
+
+	// Any additional cleanup for services can be added here
+	// For example, stopping background goroutines, closing connections, etc.
 
 	log.Println("Application shutdown complete")
 	return nil

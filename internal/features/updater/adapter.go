@@ -9,29 +9,33 @@ import (
 	updaterDomain "k2p-updater/internal/features/updater/domain"
 	"k2p-updater/internal/features/updater/service"
 	"k2p-updater/pkg/resource"
+
+	"k8s.io/client-go/kubernetes"
 )
 
 // NewProvider creates and initializes a new updater provider
 func NewProvider(
 	ctx context.Context,
-	config *app.UpdaterConfig,
+	config *app.Config,
 	metricsService metricDomain.Provider,
 	exporterService exporterDomain.Provider,
 	resourceFactory *resource.Factory,
+	kubeClient kubernetes.Interface,
 ) (updaterDomain.Provider, error) {
 	// Create backend client
-	backendClient := service.NewBackendClient(config)
+	backendClient := service.NewBackendClient(&config.Backend)
 
 	// Create health verifier
 	healthVerifier := service.NewHealthVerifier(exporterService)
 
 	// Create updater service
 	updaterService := service.NewUpdaterService(
-		config,
+		&config.Updater,
 		metricsService,
 		backendClient,
 		healthVerifier,
 		resourceFactory,
+		kubeClient,
 	)
 
 	// Start the service

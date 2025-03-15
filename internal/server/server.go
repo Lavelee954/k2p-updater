@@ -9,6 +9,8 @@ import (
 	"k2p-updater/internal/features/exporter/domain"
 	"k2p-updater/internal/features/metric"
 	domainMetric "k2p-updater/internal/features/metric/domain"
+	"k2p-updater/internal/features/updater"
+	updaterDomain "k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
 	"log"
 	"net/http"
@@ -27,6 +29,7 @@ type Server struct {
 	exporterSvc     domain.Provider
 	metricsSvc      domainMetric.Provider
 	resourceFactory *resource.Factory
+	updaterSvc      updaterDomain.Provider
 	httpServer      *http.Server
 	router          *gin.Engine
 }
@@ -102,7 +105,26 @@ func (s *Server) Initialize(ctx context.Context) error {
 	}
 	s.resourceFactory = factory
 
-	//// 5. Setup HTTP routes and handler
+	// 5. Initialize updater service
+	log.Println("Initializing updater service...")
+	updaterCtx, updaterCancel := context.WithTimeout(initCtx, 30*time.Second)
+	defer updaterCancel()
+
+	updaterProvider, err := updater.NewProvider(
+		updaterCtx,
+		s.cfg,
+		s.metricsSvc,
+		s.exporterSvc,
+		s.resourceFactory,
+		s.kubeClients.FullClientSet,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to initialize updater service: %w", err)
+	}
+	log.Println("Updater service initialized successfully")
+	s.updaterSvc = updaterProvider
+
+	//// 6. Setup HTTP routes and handler
 	//if err := s.setupRoutes(); err != nil {
 	//	return fmt.Errorf("failed to setup HTTP routes: %w", err)
 	//}

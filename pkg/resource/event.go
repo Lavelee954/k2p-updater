@@ -82,7 +82,7 @@ func (e EventInfo) normalRecordInternal(ctx context.Context, resourceKey, nodeNa
 
 	event := &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%s", resourceName, time.Now().Format("20060102-150405")),
+			Name:      fmt.Sprintf("%s-%s", resourceName, time.Now().Format(time.RFC3339)),
 			Namespace: resource.namespace,
 		},
 		InvolvedObject: corev1.ObjectReference{
@@ -163,7 +163,7 @@ func (e EventInfo) warningRecordInternal(ctx context.Context, resourceKey, nodeN
 
 	event := &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      fmt.Sprintf("%s-%s", resourceName, time.Now().Format("20060102-150405")),
+			Name:      fmt.Sprintf("%s-%s", resourceName, time.Now().Format(time.RFC3339)),
 			Namespace: resource.namespace,
 		},
 		InvolvedObject: corev1.ObjectReference{

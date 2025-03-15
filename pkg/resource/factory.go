@@ -178,7 +178,7 @@ func convertToTemplate(namespace, group, version string, definitions map[string]
 				def.StatusField[k] = v
 			}
 		} else {
-			return nil, fmt.Errorf("리소스 %s의 유효하지 않은 상태 필드 타입", key)
+			return nil, fmt.Errorf("invalid status field type for resource %s", key)
 		}
 
 		res.definition[key] = def

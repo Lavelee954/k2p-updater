@@ -113,7 +113,7 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 			ctx,
 			"updater",
 			status.NodeName,
-			"CooldownStatus",
+			string(domain.StatePendingVmSpecUp),
 			"Node %s cooldown update: %.1f minutes remaining, CPU: %.2f%%, Avg: %.2f%%",
 			status.NodeName,
 			time.Until(newStatus.CoolDownEndTime).Minutes(),

@@ -101,7 +101,7 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *domain.ControlPl
 			ctx,
 			"updater",
 			status.NodeName,
-			"CPUMetricsUpdate",
+			string(domain.StatePendingVmSpecUp),
 			"Node %s CPU metrics: current %.2f%%, window avg %.2f%%",
 			status.NodeName,
 			newStatus.CPUUtilization,
@@ -126,7 +126,7 @@ func (h *monitoringHandler) OnEnter(ctx context.Context, status *domain.ControlP
 		ctx,
 		"updater",
 		status.NodeName,
-		"MonitoringStarted",
+		string(domain.StatePendingVmSpecUp),
 		"Node %s is now monitoring CPU utilization (current: %.2f%%, window avg: %.2f%%)",
 		status.NodeName,
 		status.CPUUtilization,
@@ -163,7 +163,7 @@ func (h *monitoringHandler) OnExit(ctx context.Context, status *domain.ControlPl
 		ctx,
 		"updater",
 		status.NodeName,
-		"MonitoringStarted",
+		string(domain.StatePendingVmSpecUp),
 		eventMsg,
 	)
 

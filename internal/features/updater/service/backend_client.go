@@ -142,7 +142,43 @@ func (c *BackendClient) RequestVMSpecUp(ctx context.Context, nodeName string, cu
 			return backoff.Permanent(fmt.Errorf("failed to create request: %w", err))
 		}
 
-		// Rest of the code remains the same...
+		// Set headers
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", c.apiKey))
+
+		// Send request
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			// Transient network errors should be retried
+			return fmt.Errorf("request failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		// Handle different response statuses
+		switch resp.StatusCode {
+		case http.StatusOK, http.StatusCreated, http.StatusAccepted:
+			// Parse successful response
+			var response struct {
+				Success bool `json:"success"`
+			}
+
+			if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+				return backoff.Permanent(fmt.Errorf("failed to parse response: %w", err))
+			}
+
+			responseSuccess = response.Success
+			return nil
+
+		case http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			// Retry these errors
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("backend returned status %d: %s", resp.StatusCode, string(body))
+
+		default:
+			// Don't retry other errors
+			body, _ := io.ReadAll(resp.Body)
+			return backoff.Permanent(fmt.Errorf("backend returned status %d: %s", resp.StatusCode, string(body)))
+		}
 	}
 
 	// Modify to use backoff.RetryNotify to get visibility into retries

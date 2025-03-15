@@ -7,6 +7,7 @@ import (
 	metricDomain "k2p-updater/internal/features/metric/domain"
 	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
+	"k8s.io/client-go/kubernetes"
 	"log"
 	"sync"
 	"time"
@@ -20,6 +21,13 @@ type UpdaterService struct {
 	backendClient   domain.BackendClient
 	healthVerifier  domain.HealthVerifier
 	resourceFactory *resource.Factory
+
+	// Additional required fields
+	coordinationManager *CoordinationManager
+	nodeDiscoverer      *NodeDiscoverer
+	kubeClient          kubernetes.Interface
+	recoveryManager     *RecoveryManager
+	metricsCollector    *MetricsCollector
 
 	// Control structures
 	startOnce  sync.Once
@@ -35,6 +43,7 @@ func NewUpdaterService(
 	backendClient domain.BackendClient,
 	healthVerifier domain.HealthVerifier,
 	resourceFactory *resource.Factory,
+	kubeClient kubernetes.Interface,
 ) domain.Provider {
 	// Convert app config to domain config
 	domainConfig := domain.UpdaterConfig{
@@ -45,18 +54,23 @@ func NewUpdaterService(
 		CooldownUpdateInterval: time.Minute, // Default to 1 minute
 	}
 
+	// Create metrics collector
+	metricsCollector := NewMetricsCollector()
+
 	// Create state machine
-	stateMachine := NewStateMachine(resourceFactory)
+	stateMachine := NewStateMachine(resourceFactory, metricsCollector)
 
 	return &UpdaterService{
-		config:          domainConfig,
-		stateMachine:    stateMachine,
-		metricsService:  metricsService,
-		backendClient:   backendClient,
-		healthVerifier:  healthVerifier,
-		resourceFactory: resourceFactory,
-		stopChan:        make(chan struct{}),
-		nodes:           []string{},
+		config:           domainConfig,
+		stateMachine:     stateMachine,
+		metricsService:   metricsService,
+		backendClient:    backendClient,
+		healthVerifier:   healthVerifier,
+		resourceFactory:  resourceFactory,
+		kubeClient:       kubeClient,
+		metricsCollector: metricsCollector,
+		stopChan:         make(chan struct{}),
+		nodes:            []string{},
 	}
 }
 

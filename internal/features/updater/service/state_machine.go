@@ -22,16 +22,20 @@ type stateMachine struct {
 	// resourceFactory is used to update the custom resource status
 	resourceFactory *resource.Factory
 
+	// metricsCollector collects metrics about the state machine
+	metricsCollector *MetricsCollector
+
 	// mu protects concurrent access to the status map
 	mu sync.RWMutex
 }
 
 // NewStateMachine creates a new state machine
-func NewStateMachine(resourceFactory *resource.Factory) domain.StateMachine {
+func NewStateMachine(resourceFactory *resource.Factory, metricsCollector *MetricsCollector) domain.StateMachine {
 	sm := &stateMachine{
-		statusMap:       make(map[string]*domain.ControlPlaneStatus),
-		stateHandlers:   make(map[domain.State]domain.StateHandler),
-		resourceFactory: resourceFactory,
+		statusMap:        make(map[string]*domain.ControlPlaneStatus),
+		stateHandlers:    make(map[domain.State]domain.StateHandler),
+		resourceFactory:  resourceFactory,
+		metricsCollector: metricsCollector,
 	}
 
 	// Register state handlers

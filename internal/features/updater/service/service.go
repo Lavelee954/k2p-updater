@@ -189,7 +189,8 @@ func (s *UpdaterService) Stop() {
 
 	close(s.stopChan)
 
-	// Add additional cleanup if necessary
+	// Wait a brief moment for goroutines to terminate
+	time.Sleep(100 * time.Millisecond)
 
 	log.Println("Updater service stopped")
 }
@@ -447,9 +448,21 @@ func (s *UpdaterService) monitoringLoop(ctx context.Context) {
 			log.Println("Monitoring loop received stop signal")
 			return
 		case <-monitoringTicker.C:
+			// Check context before performing operations
+			if ctx.Err() != nil {
+				log.Println("Skipping monitoring update due to canceled context")
+				return
+			}
+
 			log.Println("Monitoring ticker triggered, updating node metrics")
 			s.updateAllNodeMetrics(ctx)
 		case <-statusUpdateTicker.C:
+			// Check context before performing operations
+			if ctx.Err() != nil {
+				log.Println("Skipping status update due to canceled context")
+				return
+			}
+
 			log.Println("Status update ticker triggered, updating node status")
 			s.updateAllNodeStatus(ctx)
 		}
@@ -458,16 +471,26 @@ func (s *UpdaterService) monitoringLoop(ctx context.Context) {
 
 // cooldownLoop periodically updates cooldown status
 func (s *UpdaterService) cooldownLoop(ctx context.Context) {
+	log.Println("Starting cooldown loop")
+
 	cooldownTicker := time.NewTicker(s.config.CooldownUpdateInterval)
 	defer cooldownTicker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			log.Println("Cooldown loop context canceled")
 			return
 		case <-s.stopChan:
+			log.Println("Cooldown loop received stop signal")
 			return
 		case <-cooldownTicker.C:
+			// Check context before performing operations
+			if ctx.Err() != nil {
+				log.Println("Skipping cooldown update due to canceled context")
+				return
+			}
+
 			s.updateAllCooldowns(ctx)
 		}
 	}
@@ -531,6 +554,12 @@ func (s *UpdaterService) updateAllNodeStatus(ctx context.Context) {
 }
 
 func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
+	// Check context cancellation at the beginning
+	if ctx.Err() != nil {
+		log.Printf("Skipping node metrics update due to context cancellation: %v", ctx.Err())
+		return
+	}
+
 	s.nodesMutex.RLock()
 	nodesToUpdate := make([]string, len(s.nodes))
 	copy(nodesToUpdate, s.nodes)
@@ -704,6 +733,8 @@ func (s *UpdaterService) updateAllCooldowns(ctx context.Context) {
 
 // recoveryLoop periodically checks for nodes in failed state and attempts recovery
 func (s *UpdaterService) recoveryLoop(ctx context.Context) {
+	log.Println("Starting recovery loop")
+
 	// Create recovery manager if not already available
 	if s.recoveryManager == nil {
 		s.recoveryManager = NewRecoveryManager(s.stateMachine)
@@ -715,10 +746,18 @@ func (s *UpdaterService) recoveryLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			log.Println("Recovery loop context canceled")
 			return
 		case <-s.stopChan:
+			log.Println("Recovery loop received stop signal")
 			return
 		case <-ticker.C:
+			// Check context before performing operations
+			if ctx.Err() != nil {
+				log.Println("Skipping recovery check due to canceled context")
+				return
+			}
+
 			s.nodesMutex.RLock()
 			nodesToCheck := make([]string, len(s.nodes))
 			copy(nodesToCheck, s.nodes)

@@ -14,10 +14,12 @@ resources:
       singular: "k2pupdater"
       kind: "K2pUpdater"
       name_format: "k2pupdater-%s"
+      cr_name: "master"
       status_field: "updates"
     upgrader:
       resource: "k2pupgraders"
       singular: "k2pupgrader"
       kind: "K2pUpgrader"
       name_format: "k2pupgrader-%s"
-      tus_field: "upgraders"
+      cr_name: "master"
+      status_field: "upgraders"

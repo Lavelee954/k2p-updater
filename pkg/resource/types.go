@@ -17,4 +17,5 @@ type Definition struct {
 	Resource    string
 	StatusField map[interface{}]interface{}
 	Kind        string
+	CRName      string
 }

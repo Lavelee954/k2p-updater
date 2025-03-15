@@ -2,12 +2,13 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"k2p-updater/cmd/app"
 	"k2p-updater/pkg/resource"
 	"log"
 	"time"
 )
+
+// server.go
 
 func Run() {
 	// Load configuration
@@ -23,10 +24,17 @@ func Run() {
 
 	cr, err := resource.NewManager(cfg, kcfg)
 	if err != nil {
+		log.Fatalf("Failed to create resource manager: %v", err)
 		return
 	}
 
 	ctx, _ := context.WithCancel(context.Background())
+
+	// Check if the key exists in the template
+	if _, ok := cr.Templates.Key["updater"]; !ok {
+		log.Fatalf("Resource key 'updater' not found in template")
+		return
+	}
 
 	statusMsg := "Pending"
 
@@ -38,14 +46,16 @@ func Run() {
 		"updateStatus":         "Pending",
 	}
 
+	// Use UpdateGeneric with the correct key
 	err = cr.Status.UpdateGeneric(ctx, "updater", statusData)
 	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	err = cr.Event.NormalRecord(ctx, "updater", "VmSpecUp", "suceeceeeeeee")
-	if err != nil {
+		log.Fatalf("Failed to update status: %v", err)
 		return
 	}
 
+	err = cr.Event.NormalRecord(ctx, "updater", "VmSpecUp", "suceeceeeeeee")
+	if err != nil {
+		log.Fatalf("Failed to record event: %v", err)
+		return
+	}
 }

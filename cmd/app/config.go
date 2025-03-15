@@ -56,6 +56,9 @@ type ResourceDefinitionConfig struct {
 
 	// Kind is the optional resource kind
 	Kind string `mapstructure:"kind"`
+
+	// CRName is the name to use in the format string (fixed value or "%s" for node name)
+	CRName string `mapstructure:"cr_name"`
 }
 
 // Load loads configuration from files and environment
@@ -158,14 +161,16 @@ func setDefaults(v *viper.Viper) {
 
 	// Updater resource defaults
 	v.SetDefault("resources.definitions.updater.resource", "k2pupdaters")
-	v.SetDefault("resources.definitions.updater.name_format", "k2pupdater-%s")
-	v.SetDefault("resources.definitions.updater.status_field", "updates")
 	v.SetDefault("resources.definitions.updater.kind", "K2pUpdater")
+	v.SetDefault("resources.definitions.updater.name_format", "k2pupdater-%s")
+	v.SetDefault("resources.definitions.updater.cr_name", "master")
+	v.SetDefault("resources.definitions.updater.status_field", "updates")
 
 	// Upgrade resource defaults
 	v.SetDefault("resources.definitions.upgrader.resource", "k2pupgraders")
 	v.SetDefault("resources.definitions.upgrader.name_format", "k2pupgrader-%s")
 	v.SetDefault("resources.definitions.upgrader.status_field", "upgradeStatus")
+	v.SetDefault("resources.definitions.upgrader.cr_name", "master")
 	v.SetDefault("resources.definitions.upgrader.kind", "K2pUpgrader")
 }
 

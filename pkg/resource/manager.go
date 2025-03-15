@@ -60,6 +60,7 @@ func buildTemplateFromConfig(cfg *app.Config) (*Template, error) {
 			NameFormat: defConfig.NameFormat,
 			Resource:   defConfig.Resource,
 			Kind:       defConfig.Kind,
+			CRName:     defConfig.CRName,
 		}
 
 		// Handle the StatusField which can be a string or a map

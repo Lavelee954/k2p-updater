@@ -3,9 +3,9 @@ package resource
 import (
 	"context"
 	"fmt"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 )
@@ -14,7 +14,8 @@ type Status interface {
 	Create(ctx context.Context, resourceKey, message, status string) error
 	Read(ctx context.Context, resourceKey, message, status string) error
 	Update(ctx context.Context, resourceKey, message, status string) error
-	UpdateGeneric(ctx context.Context, resourceKey string, statusData interface{}) error
+	UpdateGeneric(ctx context.Context, resourceKey string, newStatusData interface{}) error
+	UpdateGenericWithNode(ctx context.Context, resourceKey string, nodeName string, newStatusData interface{}) error
 }
 
 type StatusInfo struct {
@@ -157,6 +158,21 @@ func (t StatusInfo) Update(ctx context.Context, resourceKey, message, status str
 
 // UpdateGeneric updates the status of a resource while preserving specific fields
 func (t StatusInfo) UpdateGeneric(ctx context.Context, resourceKey string, newStatusData interface{}) error {
+	return t.updateGenericInternal(ctx, resourceKey, "", newStatusData)
+}
+
+// UpdateGenericWithNode updates the status using a specific node name for formatting
+func (t StatusInfo) UpdateGenericWithNode(ctx context.Context, resourceKey string, nodeName string, newStatusData interface{}) error {
+	return t.updateGenericInternal(ctx, resourceKey, nodeName, newStatusData)
+}
+
+// updateGenericInternal implements the status update logic with nodeName handling
+func (t StatusInfo) updateGenericInternal(ctx context.Context, resourceKey string, nodeName string, newStatusData interface{}) error {
+	// Validate resource key
+	if resourceKey == "" {
+		return fmt.Errorf("resource key cannot be empty")
+	}
+
 	// 1. Extract ResourceName registered in a template by resourceKey
 	resource, exists := t.Template.Key[resourceKey]
 	if !exists {
@@ -170,10 +186,20 @@ func (t StatusInfo) UpdateGeneric(ctx context.Context, resourceKey string, newSt
 		break
 	}
 
-	// Format the resource name
-	resourceName := fmt.Sprintf(definition.NameFormat, resourceKey)
+	// 2. Set the required name for the resource based on cr_name config
+	var resourceName string
+	if definition.CRName == "%s" && nodeName != "" {
+		// When cr_name is "%s" and nodeName is provided, use nodeName
+		resourceName = fmt.Sprintf(definition.NameFormat, nodeName)
+	} else if definition.CRName != "" {
+		// When cr_name is a specific value, use that value
+		resourceName = fmt.Sprintf(definition.NameFormat, definition.CRName)
+	} else {
+		// Fall back to the original behavior using resourceKey
+		resourceName = fmt.Sprintf(definition.NameFormat, resourceKey)
+	}
 
-	// 2. Setting up gvr for Kubernetes CR status updates with templates
+	// 3. Setting up gvr for Kubernetes CR status updates with templates
 	gvr := schema.GroupVersionResource{
 		Group:    resource.group,
 		Version:  resource.version,
@@ -218,7 +244,6 @@ func (t StatusInfo) UpdateGeneric(ctx context.Context, resourceKey string, newSt
 			newDetailsMap = detailsMap
 		} else {
 			// Try to extract fields from whatever type was passed
-			// This is a fallback since we don't have domainUpdater package
 			if m, ok := newStatusData.(map[interface{}]interface{}); ok {
 				for k, v := range m {
 					if keyStr, ok := k.(string); ok {

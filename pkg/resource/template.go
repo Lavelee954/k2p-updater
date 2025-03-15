@@ -26,6 +26,7 @@ func ConvertToTemplate(config *app.Config) (*Template, error) {
 			NameFormat:  definition.NameFormat,
 			Resource:    definition.Resource,
 			Kind:        definition.Kind,
+			CRName:      definition.CRName, // Add the CRName field
 			StatusField: make(map[interface{}]interface{}),
 		}
 

@@ -9,8 +9,8 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-// ResourceDefinition is a structure that holds a resource definition configuration
-type ResourceDefinition struct {
+// FactoryDefinition is a structure that holds a resource definition configuration
+type FactoryDefinition struct {
 	Resource    string
 	NameFormat  string
 	StatusField interface{}
@@ -19,7 +19,7 @@ type ResourceDefinition struct {
 }
 
 // GetStatusFieldString returns the StatusField as a string
-func (rd *ResourceDefinition) GetStatusFieldString() (string, bool) {
+func (rd *FactoryDefinition) GetStatusFieldString() (string, bool) {
 	if field, ok := rd.StatusField.(string); ok {
 		return field, true
 	}
@@ -31,7 +31,7 @@ type Factory struct {
 	namespace      string
 	group          string
 	version        string
-	definitions    map[string]ResourceDefinition
+	definitions    map[string]FactoryDefinition
 	dynamicClient  dynamic.Interface
 	clientSet      KubeClientInterface
 	sharedTemplate *Template
@@ -41,7 +41,7 @@ type Factory struct {
 }
 
 // NewFactory creates a factory for the resource handler
-func NewFactory(namespace, group, version string, definitions map[string]ResourceDefinition, dynamicClient dynamic.Interface, clientSet KubeClientInterface) (*Factory, error) {
+func NewFactory(namespace, group, version string, definitions map[string]FactoryDefinition, dynamicClient dynamic.Interface, clientSet KubeClientInterface) (*Factory, error) {
 	// 공유 템플릿을 한 번만 생성
 	template, err := convertToTemplate(namespace, group, version, definitions)
 	if err != nil {
@@ -144,7 +144,7 @@ func (f *Factory) CreateResource(ctx context.Context, resourceKey string, spec m
 }
 
 // convertToTemplate converts a direct parameter to a resource template
-func convertToTemplate(namespace, group, version string, definitions map[string]ResourceDefinition) (*Template, error) {
+func convertToTemplate(namespace, group, version string, definitions map[string]FactoryDefinition) (*Template, error) {
 	template := &Template{
 		Key: make(map[string]Resource),
 	}

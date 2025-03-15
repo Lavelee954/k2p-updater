@@ -66,11 +66,11 @@ func Run() {
 }
 
 // convertResourceDefinitions converts app-specific configuration to resource package format
-func convertResourceDefinitions(appDefs map[string]app.ResourceDefinitionConfig) map[string]resource.ResourceDefinition {
-	resourceDefs := make(map[string]resource.ResourceDefinition)
+func convertResourceDefinitions(appDefs map[string]app.ResourceDefinitionConfig) map[string]resource.FactoryDefinition {
+	resourceDefs := make(map[string]resource.FactoryDefinition)
 
 	for key, appDef := range appDefs {
-		resourceDefs[key] = resource.ResourceDefinition{
+		resourceDefs[key] = resource.FactoryDefinition{
 			Resource:    appDef.Resource,
 			NameFormat:  appDef.NameFormat,
 			StatusField: appDef.StatusField,

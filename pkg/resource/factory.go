@@ -1,15 +1,22 @@
 package resource
 
 import (
+	"context"
 	"fmt"
 	"k2p-updater/cmd/app"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// Factory creates resource handlers with proper dependencies
+// Factory creates and manages resource handlers
 type Factory struct {
 	config         *app.Config
 	kubeClients    *app.KubeClients
 	sharedTemplate *Template
+	eventHandler   Event
+	statusHandler  Status
+	helpers        *Helpers
 }
 
 // NewFactory creates a factory for resource handlers
@@ -20,36 +27,95 @@ func NewFactory(config *app.Config, clients *app.KubeClients) (*Factory, error) 
 		return nil, err
 	}
 
+	// Create helpers
+	helpers := &Helpers{
+		DynamicClient: clients.DynamicClient,
+		Template:      template,
+	}
+
+	// Create event handler
+	eventHandler := &EventInfo{
+		Template:      template,
+		KubeClient:    clients.ClientSet,
+		DynamicClient: clients.DynamicClient,
+	}
+
+	// Create status handler
+	statusHandler := &StatusInfo{
+		Template:      template,
+		DynamicClient: clients.DynamicClient,
+	}
+
 	return &Factory{
 		config:         config,
 		kubeClients:    clients,
 		sharedTemplate: template,
+		eventHandler:   eventHandler,
+		statusHandler:  statusHandler,
+		helpers:        helpers,
 	}, nil
 }
 
-// CreateEventHandler creates a new EventInfo instance
-func (f *Factory) CreateEventHandler() Event {
-	return &EventInfo{
-		Template:      f.sharedTemplate,
-		KubeClient:    f.kubeClients.ClientSet,
-		DynamicClient: f.kubeClients.DynamicClient,
-	}
+// Event returns the event handler
+func (f *Factory) Event() Event {
+	return f.eventHandler
 }
 
-// CreateStatusHandler creates a new StatusInfo instance
-func (f *Factory) CreateStatusHandler() Status {
-	return &StatusInfo{
-		Template:      f.sharedTemplate,
-		DynamicClient: f.kubeClients.DynamicClient,
-	}
+// Status returns the status handler
+func (f *Factory) Status() Status {
+	return f.statusHandler
 }
 
-// CreateResourceHelpers creates utility helpers for resources
-func (f *Factory) CreateResourceHelpers() *Helpers {
-	return &Helpers{
-		DynamicClient: f.kubeClients.DynamicClient,
-		Template:      f.sharedTemplate,
+// GetResource retrieves a resource by key and name
+func (f *Factory) GetResource(ctx context.Context, resourceKey, name string) (*unstructured.Unstructured, error) {
+	gvr, err := f.helpers.GetGVR(resourceKey)
+	if err != nil {
+		return nil, err
 	}
+
+	resource := f.sharedTemplate.Key[resourceKey]
+
+	return f.kubeClients.DynamicClient.Resource(gvr).
+		Namespace(resource.namespace).
+		Get(ctx, name, metav1.GetOptions{})
+}
+
+// CreateResource creates a new custom resource
+func (f *Factory) CreateResource(ctx context.Context, resourceKey string, spec map[string]interface{}) error {
+	gvr, err := f.helpers.GetGVR(resourceKey)
+	if err != nil {
+		return err
+	}
+
+	resourceName, err := f.helpers.GetResourceName(resourceKey)
+	if err != nil {
+		return err
+	}
+
+	resource := f.sharedTemplate.Key[resourceKey]
+	var definition Definition
+
+	for _, def := range resource.definition {
+		definition = def
+		break
+	}
+
+	obj := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": fmt.Sprintf("%s/%s", resource.group, resource.version),
+			"kind":       definition.Kind,
+			"metadata": map[string]interface{}{
+				"name":      resourceName,
+				"namespace": resource.namespace,
+			},
+			"spec": spec,
+		},
+	}
+
+	_, err = f.kubeClients.DynamicClient.Resource(gvr).
+		Namespace(resource.namespace).
+		Create(ctx, obj, metav1.CreateOptions{})
+	return err
 }
 
 // createTemplate converts app configuration to a resource template

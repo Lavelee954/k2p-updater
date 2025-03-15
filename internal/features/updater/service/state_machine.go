@@ -226,21 +226,14 @@ func (sm *stateMachine) UpdateStatus(ctx context.Context, nodeName string, statu
 
 // updateCRStatus updates the control plane status in the custom resource
 func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, status *domain.ControlPlaneStatus) error {
-	// Convert status to a map for the CR update
+	// Convert domain status to CRD-compatible format without extra nesting
 	statusData := map[string]interface{}{
-		"controlPlaneNodeName":     nodeName,
-		"currentState":             string(status.CurrentState),
-		"lastTransitionTime":       status.LastTransitionTime.Format(time.RFC3339),
-		"message":                  status.Message,
-		"cpuUtilization":           status.CPUUtilization,
-		"windowAverageUtilization": status.WindowAverageUtilization,
-		"specUpRequested":          status.SpecUpRequested,
-		"specUpCompleted":          status.SpecUpCompleted,
-		"healthCheckPassed":        status.HealthCheckPassed,
-	}
-
-	if !status.CoolDownEndTime.IsZero() {
-		statusData["coolDownEndTime"] = status.CoolDownEndTime.Format(time.RFC3339)
+		"controlPlaneNodeName": nodeName,
+		"cpuWinUsage":          status.WindowAverageUtilization,
+		"coolDown":             status.CurrentState == domain.StateCoolDown,
+		"updateStatus":         string(status.CurrentState),
+		"message":              status.Message,
+		"lastUpdateTime":       status.LastTransitionTime.Format(time.RFC3339),
 	}
 
 	// Update the CR status using the resource factory

@@ -54,3 +54,11 @@ type Parser interface {
 	// ParseCPUMetrics parses raw metrics into CPU metrics objects
 	ParseCPUMetrics(metricsData string, nodeName string) (*NodeCPUMetrics, error)
 }
+
+// In domain/provider.go
+
+// NodeRegistration allows manual registration of nodes in the metrics system
+type NodeRegistration interface {
+	// RegisterNode adds a node to the metrics tracking system
+	RegisterNode(ctx context.Context, nodeName string) error
+}

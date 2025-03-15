@@ -360,3 +360,33 @@ func (s *Service) calculateMinuteAverage(nodeName string, currentUsage float64) 
 
 	return avg.Sum / float64(avg.Count)
 }
+
+// RegisterNode implements domain.NodeRegistration interface
+func (s *Service) RegisterNode(ctx context.Context, nodeName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Initialize window for this node if it doesn't exist
+	if _, exists := s.windows[nodeName]; !exists {
+		s.windows[nodeName] = domainMetric.NewSlidingWindow(
+			s.config.WindowSize,
+			s.config.SlidingSize,
+			s.config.CooldownPeriod,
+		)
+		log.Printf("Initialized new window for node: %s", nodeName)
+	}
+
+	// Initialize stats tracking
+	if _, exists := s.previousStats[nodeName]; !exists {
+		s.previousStats[nodeName] = make(map[string]domainMetric.CPUStats)
+	}
+
+	// Initialize minute average
+	if _, exists := s.nodeAverages[nodeName]; !exists {
+		s.nodeAverages[nodeName] = &domainMetric.MinuteAverage{
+			StartTime: time.Now(),
+		}
+	}
+
+	return nil
+}

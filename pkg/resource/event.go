@@ -4,6 +4,8 @@ package resource
 import (
 	"context"
 	"fmt"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -25,8 +27,9 @@ type KubeClientInterface interface {
 }
 
 type EventInfo struct {
-	Template   *Template
-	KubeClient KubeClientInterface
+	Template      *Template
+	KubeClient    KubeClientInterface
+	DynamicClient dynamic.Interface
 }
 
 // NormalRecord creates a normal event for the specified resource
@@ -35,11 +38,6 @@ func (e EventInfo) NormalRecord(ctx context.Context, resourceKey, reason, messag
 }
 
 // NormalRecordWithNode creates a normal event for the specified resource with a node name
-func (e EventInfo) NormalRecordWithNode(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error {
-	return e.normalRecordInternal(ctx, resourceKey, nodeName, reason, message, args...)
-}
-
-// normalRecordInternal implements the logic for creating normal events
 func (e EventInfo) normalRecordInternal(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error {
 	// 1. Get the information registered in the template by resourceKey
 	resource, exists := e.Template.Key[resourceKey]
@@ -67,7 +65,20 @@ func (e EventInfo) normalRecordInternal(ctx context.Context, resourceKey, nodeNa
 		resourceName = fmt.Sprintf(definition.NameFormat, resourceKey)
 	}
 
-	// 3. Register a normal event
+	// Create GVR to fetch the resource
+	gvr := schema.GroupVersionResource{
+		Group:    resource.group,
+		Version:  resource.version,
+		Resource: definition.Resource,
+	}
+
+	// Get the actual CR to access its UID and ResourceVersion
+	obj, err := e.DynamicClient.Resource(gvr).Namespace(resource.namespace).Get(ctx, resourceName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get resource %s: %w", resourceName, err)
+	}
+
+	// 3. Register a normal event with proper resource linking
 	formattedMessage := fmt.Sprintf(message, args...)
 
 	event := &corev1.Event{
@@ -76,17 +87,19 @@ func (e EventInfo) normalRecordInternal(ctx context.Context, resourceKey, nodeNa
 			Namespace: resource.namespace,
 		},
 		InvolvedObject: corev1.ObjectReference{
-			Kind:       definition.Kind,
-			Namespace:  resource.namespace,
-			Name:       resourceName,
-			APIVersion: fmt.Sprintf("%s/%s", resource.group, resource.version),
+			Kind:            definition.Kind,
+			Namespace:       resource.namespace,
+			Name:            resourceName,
+			APIVersion:      fmt.Sprintf("%s/%s", resource.group, resource.version),
+			UID:             obj.GetUID(),
+			ResourceVersion: obj.GetResourceVersion(),
 		},
 		Reason:  reason,
 		Message: formattedMessage,
 		Type:    corev1.EventTypeNormal,
 	}
 
-	_, err := e.KubeClient.CoreV1().Events(resource.namespace).Create(ctx, event, metav1.CreateOptions{})
+	_, err = e.KubeClient.CoreV1().Events(resource.namespace).Create(ctx, event, metav1.CreateOptions{})
 	return err
 }
 
@@ -95,7 +108,12 @@ func (e EventInfo) WarningRecord(ctx context.Context, resourceKey, reason, messa
 	return e.warningRecordInternal(ctx, resourceKey, "", reason, message, args...)
 }
 
-// WarningRecordWithNode creates a warning event for the specified resource with a node name
+// NormalRecordWithNode method implementation
+func (e EventInfo) NormalRecordWithNode(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error {
+	return e.normalRecordInternal(ctx, resourceKey, nodeName, reason, message, args...)
+}
+
+// WarningRecordWithNode method implementation
 func (e EventInfo) WarningRecordWithNode(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error {
 	return e.warningRecordInternal(ctx, resourceKey, nodeName, reason, message, args...)
 }
@@ -128,7 +146,20 @@ func (e EventInfo) warningRecordInternal(ctx context.Context, resourceKey, nodeN
 		resourceName = fmt.Sprintf(definition.NameFormat, resourceKey)
 	}
 
-	// 3. Register a warning event
+	// Create GVR to fetch the resource
+	gvr := schema.GroupVersionResource{
+		Group:    resource.group,
+		Version:  resource.version,
+		Resource: definition.Resource,
+	}
+
+	// Get the actual CR to access its UID and ResourceVersion
+	obj, err := e.DynamicClient.Resource(gvr).Namespace(resource.namespace).Get(ctx, resourceName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get resource %s: %w", resourceName, err)
+	}
+
+	// 3. Register a warning event with proper resource linking
 	formattedMessage := fmt.Sprintf(message, args...)
 
 	event := &corev1.Event{
@@ -137,16 +168,18 @@ func (e EventInfo) warningRecordInternal(ctx context.Context, resourceKey, nodeN
 			Namespace: resource.namespace,
 		},
 		InvolvedObject: corev1.ObjectReference{
-			Kind:       definition.Kind,
-			Namespace:  resource.namespace,
-			Name:       resourceName,
-			APIVersion: fmt.Sprintf("%s/%s", resource.group, resource.version),
+			Kind:            definition.Kind,
+			Namespace:       resource.namespace,
+			Name:            resourceName,
+			APIVersion:      fmt.Sprintf("%s/%s", resource.group, resource.version),
+			UID:             obj.GetUID(),
+			ResourceVersion: obj.GetResourceVersion(),
 		},
 		Reason:  reason,
 		Message: formattedMessage,
 		Type:    corev1.EventTypeWarning,
 	}
 
-	_, err := e.KubeClient.CoreV1().Events(resource.namespace).Create(ctx, event, metav1.CreateOptions{})
+	_, err = e.KubeClient.CoreV1().Events(resource.namespace).Create(ctx, event, metav1.CreateOptions{})
 	return err
 }

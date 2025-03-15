@@ -58,5 +58,4 @@ func Run() {
 		log.Fatalf("Failed to update status: %v", err)
 		return
 	}
-
 }

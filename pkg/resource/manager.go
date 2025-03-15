@@ -29,8 +29,9 @@ func NewManager(cfg *app.Config, clients *app.KubeClients) (*Manager, error) {
 
 	// Create event and status handlers
 	eventHandler := &EventInfo{
-		Template:   template,
-		KubeClient: clients.ClientSet,
+		Template:      template,
+		KubeClient:    clients.ClientSet,
+		DynamicClient: clients.DynamicClient,
 	}
 
 	statusHandler := &StatusInfo{

@@ -147,8 +147,9 @@ func (f *Factory) CreateEventHandler() (Event, error) {
 	}
 
 	return &EventInfo{
-		Template:   template,
-		KubeClient: f.ClientSet,
+		Template:      template,
+		KubeClient:    f.ClientSet,
+		DynamicClient: f.DynamicClient,
 	}, nil
 }
 

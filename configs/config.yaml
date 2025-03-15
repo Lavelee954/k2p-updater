@@ -1,7 +1,46 @@
+server:
+  port: ":8080"
+  shutdown_timeout: 10s
+
 kubernetes:
   namespace: "ks-operator"
   # config_path: "/path/to/kubeconfig"
   # master_url: "https://kubernetes.default.svc"
+
+metrics:
+  window_size: 10m
+  sliding_size: 1m
+  cooldown_period: 5m
+  scale_trigger: 50.0
+
+updater:
+  scale_threshold: 50.0
+  scale_up_step: 1
+  cooldown_period: 5m
+
+exporter:
+  namespace: "monitoring"
+  app_label: "app=node-exporter"
+  update_interval: 30s
+  retry_interval: 5s
+  max_retries: 3
+  health_check_timeout: 5s
+  metrics_port: 9100
+
+backend:
+  # base_url: "https://api.backend-service.com/v1"
+  base_url: "http://localhost:8081"
+  # api_key: "your-api-key"
+  timeout: 30s
+  # Authentication configuration
+  secret_name: "backend-credentials"  # Kubernetes secret containing credentials
+  auth_path: "auth/token"             # API path for authentication
+  base_url_key: "baseUrl"             # Key in the secret containing the base URL
+  source_component: "k2p-updater"     # Component identifier for authentication
+
+app:
+  component: "k2p-updater"
+  log_level: "info"
 
 resources:
   namespace: "ks-operator"

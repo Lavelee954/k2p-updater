@@ -28,7 +28,7 @@ func Run() {
 		return
 	}
 
-	ctx, _ := context.WithCancel(context.Background())
+	ctx := context.Background()
 
 	// Check if the key exists in the template
 	if _, ok := cr.Templates.Key["updater"]; !ok {
@@ -36,7 +36,13 @@ func Run() {
 		return
 	}
 
-	statusMsg := "Pending"
+	statusMsg := "정상적으로 등록되었습니다."
+
+	err = cr.Event.NormalRecord(ctx, "updater", "VmSpecUp", statusMsg)
+	if err != nil {
+		log.Fatalf("Failed to record event: %v", err)
+		return
+	}
 
 	statusData := map[string]interface{}{
 		"controlPlaneNodeName": "cp-k8s",
@@ -53,9 +59,4 @@ func Run() {
 		return
 	}
 
-	err = cr.Event.NormalRecord(ctx, "updater", "VmSpecUp", "suceeceeeeeee")
-	if err != nil {
-		log.Fatalf("Failed to record event: %v", err)
-		return
-	}
 }

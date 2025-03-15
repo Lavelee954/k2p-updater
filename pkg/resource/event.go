@@ -1,3 +1,4 @@
+// event.go
 package resource
 
 import (
@@ -13,6 +14,8 @@ import (
 type Event interface {
 	NormalRecord(ctx context.Context, resourceKey, reason, message string, args ...interface{}) error
 	WarningRecord(ctx context.Context, resourceKey, reason, message string, args ...interface{}) error
+	NormalRecordWithNode(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error
+	WarningRecordWithNode(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error
 }
 
 // KubeClientInterface is an interface that defines only the necessary methods of a Kubernetes clientset.
@@ -26,7 +29,18 @@ type EventInfo struct {
 	KubeClient KubeClientInterface
 }
 
+// NormalRecord creates a normal event for the specified resource
 func (e EventInfo) NormalRecord(ctx context.Context, resourceKey, reason, message string, args ...interface{}) error {
+	return e.normalRecordInternal(ctx, resourceKey, "", reason, message, args...)
+}
+
+// NormalRecordWithNode creates a normal event for the specified resource with a node name
+func (e EventInfo) NormalRecordWithNode(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error {
+	return e.normalRecordInternal(ctx, resourceKey, nodeName, reason, message, args...)
+}
+
+// normalRecordInternal implements the logic for creating normal events
+func (e EventInfo) normalRecordInternal(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error {
 	// 1. Get the information registered in the template by resourceKey
 	resource, exists := e.Template.Key[resourceKey]
 	if !exists {
@@ -40,8 +54,18 @@ func (e EventInfo) NormalRecord(ctx context.Context, resourceKey, reason, messag
 		break
 	}
 
-	// 2. Set the required GVR for Kubernetes events with template information
-	resourceName := fmt.Sprintf(definition.NameFormat, resourceKey)
+	// 2. Set the required resource name based on cr_name configuration
+	var resourceName string
+	if definition.CRName == "%s" && nodeName != "" {
+		// When cr_name is "%s" and nodeName is provided, use nodeName
+		resourceName = fmt.Sprintf(definition.NameFormat, nodeName)
+	} else if definition.CRName != "" {
+		// When cr_name is a specific value, use that value
+		resourceName = fmt.Sprintf(definition.NameFormat, definition.CRName)
+	} else {
+		// Fall back to the original behavior using resourceKey
+		resourceName = fmt.Sprintf(definition.NameFormat, resourceKey)
+	}
 
 	// 3. Register a normal event
 	formattedMessage := fmt.Sprintf(message, args...)
@@ -66,7 +90,18 @@ func (e EventInfo) NormalRecord(ctx context.Context, resourceKey, reason, messag
 	return err
 }
 
+// WarningRecord creates a warning event for the specified resource
 func (e EventInfo) WarningRecord(ctx context.Context, resourceKey, reason, message string, args ...interface{}) error {
+	return e.warningRecordInternal(ctx, resourceKey, "", reason, message, args...)
+}
+
+// WarningRecordWithNode creates a warning event for the specified resource with a node name
+func (e EventInfo) WarningRecordWithNode(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error {
+	return e.warningRecordInternal(ctx, resourceKey, nodeName, reason, message, args...)
+}
+
+// warningRecordInternal implements the logic for creating warning events
+func (e EventInfo) warningRecordInternal(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error {
 	// 1. Get the information registered in the template by resourceKey
 	resource, exists := e.Template.Key[resourceKey]
 	if !exists {
@@ -80,10 +115,20 @@ func (e EventInfo) WarningRecord(ctx context.Context, resourceKey, reason, messa
 		break
 	}
 
-	// 2. Set the required GVR for Kubernetes events with template information
-	resourceName := fmt.Sprintf(definition.NameFormat, resourceKey)
+	// 2. Set the required resource name based on cr_name configuration
+	var resourceName string
+	if definition.CRName == "%s" && nodeName != "" {
+		// When cr_name is "%s" and nodeName is provided, use nodeName
+		resourceName = fmt.Sprintf(definition.NameFormat, nodeName)
+	} else if definition.CRName != "" {
+		// When cr_name is a specific value, use that value
+		resourceName = fmt.Sprintf(definition.NameFormat, definition.CRName)
+	} else {
+		// Fall back to the original behavior using resourceKey
+		resourceName = fmt.Sprintf(definition.NameFormat, resourceKey)
+	}
 
-	// 3. Register an alert event
+	// 3. Register a warning event
 	formattedMessage := fmt.Sprintf(message, args...)
 
 	event := &corev1.Event{

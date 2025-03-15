@@ -42,26 +42,26 @@ type Factory struct {
 
 // NewFactory creates a factory for the resource handler
 func NewFactory(namespace, group, version string, definitions map[string]FactoryDefinition, dynamicClient dynamic.Interface, clientSet KubeClientInterface) (*Factory, error) {
-	// 공유 템플릿을 한 번만 생성
+	// Create a shared template only once
 	template, err := convertToTemplate(namespace, group, version, definitions)
 	if err != nil {
 		return nil, err
 	}
 
-	// 헬퍼 생성
+	// Create a helper
 	helpers := &Helpers{
 		DynamicClient: dynamicClient,
 		Template:      template,
 	}
 
-	// 이벤트 핸들러 생성
+	// Create an event handler
 	eventHandler := &EventInfo{
 		Template:      template,
 		KubeClient:    clientSet,
 		DynamicClient: dynamicClient,
 	}
 
-	// 상태 핸들러 생성
+	// Create a state handler
 	statusHandler := &StatusInfo{
 		Template:      template,
 		DynamicClient: dynamicClient,

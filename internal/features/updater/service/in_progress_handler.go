@@ -4,6 +4,7 @@ import (
 	"context"
 	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
+	"log"
 )
 
 // inProgressHandler handles the InProgressVmSpecUp state
@@ -82,7 +83,7 @@ func (h *inProgressHandler) OnEnter(ctx context.Context, status *domain.ControlP
 	newStatus := *status
 
 	// Record the event
-	h.resourceFactory.Event().NormalRecordWithNode(
+	err := h.resourceFactory.Event().NormalRecordWithNode(
 		ctx,
 		"updater",
 		status.NodeName,
@@ -92,6 +93,13 @@ func (h *inProgressHandler) OnEnter(ctx context.Context, status *domain.ControlP
 		status.CPUUtilization,
 		status.WindowAverageUtilization,
 	)
+
+	if err != nil {
+		log.Printf("Failed to record completion event for node %s: %v", status.NodeName, err)
+		// Don't return error as we don't want to prevent state transition
+	} else {
+		log.Printf("Successfully recorded completion event for node %s", status.NodeName)
+	}
 
 	return &newStatus, nil
 }

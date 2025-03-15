@@ -4,6 +4,7 @@ import (
 	"context"
 	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
+	"log"
 	"time"
 )
 
@@ -63,7 +64,7 @@ func (h *failedHandler) OnEnter(ctx context.Context, status *domain.ControlPlane
 	}
 
 	// Record the failed event
-	h.resourceFactory.Event().WarningRecordWithNode(
+	err := h.resourceFactory.Event().WarningRecordWithNode(
 		ctx,
 		"updater",
 		status.NodeName,
@@ -72,6 +73,13 @@ func (h *failedHandler) OnEnter(ctx context.Context, status *domain.ControlPlane
 		status.NodeName,
 		errorReason,
 	)
+
+	if err != nil {
+		log.Printf("Failed to record completion event for node %s: %v", status.NodeName, err)
+		// Don't return error as we don't want to prevent state transition
+	} else {
+		log.Printf("Successfully recorded completion event for node %s", status.NodeName)
+	}
 
 	return &newStatus, nil
 }

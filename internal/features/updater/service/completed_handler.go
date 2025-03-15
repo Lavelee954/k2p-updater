@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
+	"log"
 	"time"
 )
 
@@ -59,12 +60,9 @@ func (h *completedHandler) Handle(ctx context.Context, status *domain.ControlPla
 func (h *completedHandler) OnEnter(ctx context.Context, status *domain.ControlPlaneStatus) (*domain.ControlPlaneStatus, error) {
 	newStatus := *status
 
-	// Set up automatic transition to cooldown state
-	// In a real implementation, we might want to trigger this via a goroutine
-	// or scheduler rather than doing it immediately
-
 	// Record the completion event
-	h.resourceFactory.Event().NormalRecordWithNode(
+	log.Printf("Recording completion event for node %s", status.NodeName)
+	err := h.resourceFactory.Event().NormalRecordWithNode(
 		ctx,
 		"updater",
 		status.NodeName,
@@ -72,6 +70,12 @@ func (h *completedHandler) OnEnter(ctx context.Context, status *domain.ControlPl
 		"Node %s successfully completed VM spec up process",
 		status.NodeName,
 	)
+	if err != nil {
+		log.Printf("Failed to record completion event for node %s: %v", status.NodeName, err)
+		// Don't return error as we don't want to prevent state transition
+	} else {
+		log.Printf("Successfully recorded completion event for node %s", status.NodeName)
+	}
 
 	// Automatically enter cooldown after recording completion
 	cooldownPeriod := 5 * time.Minute
@@ -79,7 +83,12 @@ func (h *completedHandler) OnEnter(ctx context.Context, status *domain.ControlPl
 		"cooldownPeriod": cooldownPeriod,
 	}
 
-	tempStatus, _ := h.Handle(ctx, &newStatus, domain.EventEnterCooldown, data)
+	tempStatus, err := h.Handle(ctx, &newStatus, domain.EventEnterCooldown, data)
+	if err != nil {
+		log.Printf("Failed to handle cooldown event for node %s: %v", status.NodeName, err)
+		// Continue with original status rather than failing the transition
+		return &newStatus, nil
+	}
 	return tempStatus, nil
 }
 

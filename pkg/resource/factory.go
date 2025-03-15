@@ -26,7 +26,7 @@ func (rd *FactoryDefinition) GetStatusFieldString() (string, bool) {
 	return "", false
 }
 
-// Factory creates and manages resource handlers
+// Factory creates and manages resource handler
 type Factory struct {
 	namespace      string
 	group          string

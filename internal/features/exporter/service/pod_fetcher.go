@@ -7,17 +7,17 @@ import (
 	v1 "k8s.io/api/core/v1"
 )
 
-// podFetcher는 domain.PodFetcher 인터페이스를 구현합니다.
+// podFetcher implements the domain.PodFetcher interface.
 type podFetcher struct {
 	client domain.KubernetesClient
 }
 
-// newPodFetcher는 새로운 PodFetcher를 생성합니다.
+// newPodFetcher creates a new PodFetcher.
 func newPodFetcher(client domain.KubernetesClient) domain.PodFetcher {
 	return &podFetcher{client: client}
 }
 
-// FetchPods는 domain.PodFetcher.FetchPods를 구현합니다.
+// FetchPods implements domain.PodFetcher.FetchPods.
 func (f *podFetcher) FetchPods(ctx context.Context, namespace, labelSelector string) ([]v1.Pod, error) {
 	return f.client.GetPods(ctx, namespace, labelSelector)
 }

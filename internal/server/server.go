@@ -8,6 +8,9 @@ import (
 	"k2p-updater/internal/features/exporter"
 	"k2p-updater/internal/features/exporter/domain"
 	"k2p-updater/internal/features/metric"
+	domainMetric "k2p-updater/internal/features/metric/domain"
+	"k2p-updater/internal/handlers"
+	"k2p-updater/internal/middleware"
 	"k2p-updater/pkg/resource"
 	"log"
 	"net/http"
@@ -15,6 +18,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // Server encapsulates the application server functionality
@@ -22,9 +27,10 @@ type Server struct {
 	cfg             *app.Config
 	kubeClients     *app.KubeClients
 	exporterSvc     domain.Provider
-	metricsSvc      interface{}
+	metricsSvc      domainMetric.Provider
 	resourceFactory *resource.Factory
 	httpServer      *http.Server
+	router          *gin.Engine
 }
 
 // NewServer creates a new server instance
@@ -41,9 +47,13 @@ func NewServer(ctx context.Context) (*Server, error) {
 		return nil, fmt.Errorf("failed to create Kubernetes clients: %w", err)
 	}
 
+	// 3. Setup Gin router
+	router := gin.Default()
+
 	return &Server{
 		cfg:         cfg,
 		kubeClients: kubeClients,
+		router:      router,
 	}, nil
 }
 
@@ -94,33 +104,42 @@ func (s *Server) Initialize(ctx context.Context) error {
 	}
 	s.resourceFactory = factory
 
+	// 5. Setup HTTP routes and handler
+	if err := s.setupRoutes(); err != nil {
+		return fmt.Errorf("failed to setup HTTP routes: %w", err)
+	}
+
+	return nil
+}
+
+// setupRoutes configures all HTTP routes and handler
+func (s *Server) setupRoutes() error {
+	// Add common middleware
+	s.router.Use(middleware.LoggingMiddleware())
+
+	// Create and register health handler
+	healthHandler := handlers.NewHealthHandler()
+	healthHandler.SetupRoutes(s.router)
+
+	// Add other handler as needed
+	// Example: statusHandler := handler.NewStatusHandler(s.updaterService)
+	//          statusHandler.SetupRoutes(s.router)
+
 	return nil
 }
 
 // Start begins the server operation and handles graceful shutdown
 func (s *Server) Start(ctx context.Context) error {
-	// 1. Record initialization event
-	statusMsg := fmt.Sprintf(
-		"Service initialized. Scale threshold: %.1f%%, Window size: %.1f minutes",
-		s.cfg.Metrics.ScaleTrigger,
-		s.cfg.Metrics.WindowSize.Minutes(),
-	)
-	if err := s.resourceFactory.Event().NormalRecord(ctx, "updater", "ServiceStart", statusMsg); err != nil {
-		log.Printf("Warning: Failed to record initialization event: %v", err)
+	// Log server starting
+	log.Printf("Starting service on port %s", s.cfg.Server.Port)
+
+	// Create HTTP server with the Gin router
+	s.httpServer = &http.Server{
+		Addr:    s.cfg.Server.Port,
+		Handler: s.router,
 	}
 
-	// 2. Update initial status
-	statusData := map[string]interface{}{
-		"lastUpdateTime": time.Now().Format(time.RFC3339),
-		"status":         "Running",
-		"message":        "Service initialized successfully",
-	}
-
-	if err := s.resourceFactory.Status().UpdateGeneric(ctx, "updater", statusData); err != nil {
-		log.Printf("Warning: Failed to update initial status: %v", err)
-	}
-
-	// 3. Start HTTP server in background
+	// Start HTTP server in background
 	serverErrCh := make(chan error, 1)
 	go func() {
 		log.Printf("Starting HTTP server on %s", s.cfg.Server.Port)
@@ -129,7 +148,7 @@ func (s *Server) Start(ctx context.Context) error {
 		}
 	}()
 
-	// 4. Wait for either server error or context cancellation
+	// Wait for either server error or context cancellation
 	select {
 	case err := <-serverErrCh:
 		return err
@@ -144,22 +163,6 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) Shutdown() error {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), s.cfg.Server.ShutdownTimeout)
 	defer shutdownCancel()
-
-	// Update final status before shutdown
-	finalStatusData := map[string]interface{}{
-		"lastUpdateTime": time.Now().Format(time.RFC3339),
-		"status":         "Shutdown",
-		"message":        "Service shutting down gracefully",
-	}
-
-	if err := s.resourceFactory.Status().UpdateGeneric(shutdownCtx, "updater", finalStatusData); err != nil {
-		log.Printf("Warning: Failed to update final status: %v", err)
-	}
-
-	// Record shutdown event
-	if err := s.resourceFactory.Event().NormalRecord(shutdownCtx, "updater", "ServiceStop", "Service shutting down"); err != nil {
-		log.Printf("Warning: Failed to record shutdown event: %v", err)
-	}
 
 	// Shutdown HTTP server
 	if err := s.httpServer.Shutdown(shutdownCtx); err != nil {

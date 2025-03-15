@@ -4,6 +4,7 @@ import (
 	"context"
 	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
+	"time"
 )
 
 // failedHandler handles the FailedVmSpecUp state
@@ -23,12 +24,31 @@ func (h *failedHandler) Handle(ctx context.Context, status *domain.ControlPlaneS
 	// Create a copy of the status to work with
 	newStatus := *status
 
-	// Failed state is a terminal state for this iteration
-	// We don't expect transitions out of this state for now
+	switch event {
+	case domain.EventRecoveryAttempt:
+		// Transition back to pending state for another attempt
+		newStatus.CurrentState = domain.StatePendingVmSpecUp
+		newStatus.Message = "Attempting recovery from failed state"
 
-	// However, in a real-world scenario, you might want to add recovery logic
-	// or a retry mechanism here
+		// Reset failure flags
+		newStatus.SpecUpRequested = false
+		newStatus.SpecUpCompleted = false
+		newStatus.HealthCheckPassed = false
 
+		// Set cooldown time if provided
+		if data != nil {
+			if cooldownTime, ok := data["coolDownEndTime"].(time.Time); ok {
+				newStatus.CoolDownEndTime = cooldownTime
+			} else {
+				// Default recovery cooldown
+				newStatus.CoolDownEndTime = time.Now().Add(10 * time.Minute)
+			}
+		}
+
+		return &newStatus, nil
+	}
+
+	// Default: no state change for other events
 	return &newStatus, nil
 }
 

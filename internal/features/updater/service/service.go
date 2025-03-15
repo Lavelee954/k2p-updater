@@ -246,14 +246,23 @@ func (s *UpdaterService) IsCooldownActive(ctx context.Context, nodeName string) 
 
 // discoverNodes discovers control plane nodes to monitor
 func (s *UpdaterService) discoverNodes(ctx context.Context) error {
-	// In a real implementation, this would discover nodes from Kubernetes API
-	// For simplicity, we'll just use a placeholder
 	s.nodesMutex.Lock()
 	defer s.nodesMutex.Unlock()
 
-	// TODO: Implement proper node discovery
-	s.nodes = []string{"master-1", "master-2", "master-3"}
-	log.Printf("Discovered %d control plane nodes", len(s.nodes))
+	// Create node discoverer if not already available
+	if s.nodeDiscoverer == nil {
+		s.nodeDiscoverer = NewNodeDiscoverer(s.kubeClient, s.config.Namespace)
+	}
+
+	// Discover control plane nodes
+	discoveredNodes, err := s.nodeDiscoverer.DiscoverControlPlaneNodes(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to discover control plane nodes: %w", err)
+	}
+
+	// Update the nodes list
+	s.nodes = discoveredNodes
+	log.Printf("Updated nodes list with %d control plane nodes", len(s.nodes))
 
 	return nil
 }
@@ -319,12 +328,23 @@ func (s *UpdaterService) cooldownLoop(ctx context.Context) {
 	}
 }
 
-// updateAllNodeMetrics updates CPU metrics for all nodes
+// updateAllNodeMetrics updates CPU metrics for all nodes with coordination
 func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 	s.nodesMutex.RLock()
 	nodesToUpdate := make([]string, len(s.nodes))
 	copy(nodesToUpdate, s.nodes)
 	s.nodesMutex.RUnlock()
+
+	// Create coordination manager if not already available
+	if s.coordinationManager == nil {
+		s.coordinationManager = NewCoordinationManager(s.stateMachine)
+	}
+
+	// Check if any node is currently being spec'd up
+	isSpecingUp, specingUpNode, err := s.coordinationManager.IsAnyNodeSpecingUp(ctx, nodesToUpdate)
+	if err != nil {
+		log.Printf("Failed to check ongoing spec up: %v", err)
+	}
 
 	for _, nodeName := range nodesToUpdate {
 		// Get current state
@@ -352,11 +372,28 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 			"windowAverageUtilization": windowAvg,
 		}
 
-		// Check if threshold exceeded
+		// Check threshold and coordination
 		if windowAvg > s.config.ScaleThreshold {
-			// Trigger threshold exceeded event
-			if err := s.stateMachine.HandleEvent(ctx, nodeName, domain.EventThresholdExceeded, data); err != nil {
-				log.Printf("Failed to handle threshold exceeded event: %v", err)
+			// Only trigger spec up if no other node is being spec'd up
+			if !isSpecingUp {
+				// Trigger threshold exceeded event
+				if err := s.stateMachine.HandleEvent(ctx, nodeName, domain.EventThresholdExceeded, data); err != nil {
+					log.Printf("Failed to handle threshold exceeded event: %v", err)
+				} else {
+					log.Printf("Node %s triggered for spec up (CPU: %.2f%%)", nodeName, windowAvg)
+
+					// Now this node is spec'ing up, others should wait
+					isSpecingUp = true
+					specingUpNode = nodeName
+				}
+			} else {
+				log.Printf("Node %s exceeded threshold (%.2f%%) but waiting for %s to complete",
+					nodeName, windowAvg, specingUpNode)
+
+				// Just update the metrics
+				if err := s.stateMachine.HandleEvent(ctx, nodeName, domain.EventInitialize, data); err != nil {
+					log.Printf("Failed to update metrics: %v", err)
+				}
 			}
 		} else {
 			// Just update the metrics
@@ -428,6 +465,33 @@ func (s *UpdaterService) updateAllCooldowns(ctx context.Context) {
 			if err := s.stateMachine.HandleEvent(ctx, nodeName, domain.EventInitialize, data); err != nil {
 				log.Printf("Failed to update cooldown message: %v", err)
 			}
+		}
+	}
+}
+
+// recoveryLoop periodically checks for nodes in failed state and attempts recovery
+func (s *UpdaterService) recoveryLoop(ctx context.Context) {
+	// Create recovery manager if not already available
+	if s.recoveryManager == nil {
+		s.recoveryManager = NewRecoveryManager(s.stateMachine)
+	}
+
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-s.stopChan:
+			return
+		case <-ticker.C:
+			s.nodesMutex.RLock()
+			nodesToCheck := make([]string, len(s.nodes))
+			copy(nodesToCheck, s.nodes)
+			s.nodesMutex.RUnlock()
+
+			s.recoveryManager.CheckAllNodes(ctx, nodesToCheck)
 		}
 	}
 }

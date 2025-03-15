@@ -18,6 +18,7 @@ const (
 	EventHealthCheckPassed Event = "HealthCheckPassed"
 	EventHealthCheckFailed Event = "HealthCheckFailed"
 	EventEnterCooldown     Event = "EnterCooldown"
+	EventRecoveryAttempt   Event = "RecoveryAttempt"
 )
 
 // StateMachine defines the interface for the VM spec up state machine

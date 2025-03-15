@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"k2p-updater/internal/common"
-	updaterDomain "k2p-updater/internal/features/updater/domain"
+	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
 	"log"
 	"sync"
@@ -14,10 +14,10 @@ import (
 // stateMachine implements the domain.StateMachine interface
 type stateMachine struct {
 	// statusMap stores the current status for each node
-	statusMap map[string]*updaterDomain.ControlPlaneStatus
+	statusMap map[string]*domain.ControlPlaneStatus
 
 	// stateHandlers maps states to their handlers
-	stateHandlers map[updaterDomain.State]updaterDomain.StateHandler
+	stateHandlers map[domain.State]domain.StateHandler
 
 	// resourceFactory is used to update the custom resource status
 	resourceFactory *resource.Factory
@@ -27,26 +27,26 @@ type stateMachine struct {
 }
 
 // NewStateMachine creates a new state machine
-func NewStateMachine(resourceFactory *resource.Factory) updaterDomain.StateMachine {
+func NewStateMachine(resourceFactory *resource.Factory) domain.StateMachine {
 	sm := &stateMachine{
-		statusMap:       make(map[string]*updaterDomain.ControlPlaneStatus),
-		stateHandlers:   make(map[updaterDomain.State]updaterDomain.StateHandler),
+		statusMap:       make(map[string]*domain.ControlPlaneStatus),
+		stateHandlers:   make(map[domain.State]domain.StateHandler),
 		resourceFactory: resourceFactory,
 	}
 
 	// Register state handlers
-	sm.stateHandlers[updaterDomain.StatePendingVmSpecUp] = newPendingHandler(resourceFactory)
-	sm.stateHandlers[updaterDomain.StateMonitoring] = newMonitoringHandler(resourceFactory)
-	sm.stateHandlers[updaterDomain.StateInProgressVmSpecUp] = newInProgressHandler(resourceFactory)
-	sm.stateHandlers[updaterDomain.StateCompletedVmSpecUp] = newCompletedHandler(resourceFactory)
-	sm.stateHandlers[updaterDomain.StateFailedVmSpecUp] = newFailedHandler(resourceFactory)
-	sm.stateHandlers[updaterDomain.StateCoolDown] = newCoolDownHandler(resourceFactory)
+	sm.stateHandlers[domain.StatePendingVmSpecUp] = newPendingHandler(resourceFactory)
+	sm.stateHandlers[domain.StateMonitoring] = newMonitoringHandler(resourceFactory)
+	sm.stateHandlers[domain.StateInProgressVmSpecUp] = newInProgressHandler(resourceFactory)
+	sm.stateHandlers[domain.StateCompletedVmSpecUp] = newCompletedHandler(resourceFactory)
+	sm.stateHandlers[domain.StateFailedVmSpecUp] = newFailedHandler(resourceFactory)
+	sm.stateHandlers[domain.StateCoolDown] = newCoolDownHandler(resourceFactory)
 
 	return sm
 }
 
 // GetCurrentState returns the current state for a node
-func (sm *stateMachine) GetCurrentState(ctx context.Context, nodeName string) (updaterDomain.State, error) {
+func (sm *stateMachine) GetCurrentState(ctx context.Context, nodeName string) (domain.State, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -59,7 +59,7 @@ func (sm *stateMachine) GetCurrentState(ctx context.Context, nodeName string) (u
 }
 
 // HandleEvent processes an event and transitions to the next state if needed
-func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event updaterDomain.Event, data map[string]interface{}) error {
+func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event domain.Event, data map[string]interface{}) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
@@ -67,14 +67,18 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 	status, exists := sm.statusMap[nodeName]
 	if !exists {
 		// Initialize with default state
-		status = &updaterDomain.ControlPlaneStatus{
+		status = &domain.ControlPlaneStatus{
 			NodeName:           nodeName,
-			CurrentState:       updaterDomain.StatePendingVmSpecUp,
+			CurrentState:       domain.StatePendingVmSpecUp,
 			LastTransitionTime: time.Now(),
 			Message:            "Initializing",
 		}
 		sm.statusMap[nodeName] = status
 	}
+
+	// Record original state for metrics and logging
+	originalState := status.CurrentState
+	transitionStart := time.Now()
 
 	// Get current state handler
 	handler, exists := sm.stateHandlers[status.CurrentState]
@@ -94,7 +98,7 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 		exitHandler := sm.stateHandlers[status.CurrentState]
 		if exitHandler != nil {
 			if _, err := exitHandler.OnExit(ctx, status); err != nil {
-				log.Printf("Error during state exit: %v", err)
+				log.Printf("Error during state exit for node %s: %v", nodeName, err)
 			}
 		}
 
@@ -105,14 +109,67 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 		enterHandler := sm.stateHandlers[newStatus.CurrentState]
 		if enterHandler != nil {
 			if updatedStatus, err := enterHandler.OnEnter(ctx, newStatus); err != nil {
-				log.Printf("Error during state entry: %v", err)
+				log.Printf("Error during state entry for node %s: %v", nodeName, err)
 			} else {
 				newStatus = updatedStatus
 			}
 		}
 
+		// Log the state transition
 		log.Printf("State transition for node %s: %s -> %s",
 			nodeName, status.CurrentState, newStatus.CurrentState)
+
+		// Record metrics for the transition if metrics collector is available
+		if sm.metricsCollector != nil {
+			durationSeconds := time.Since(transitionStart).Seconds()
+			sm.metricsCollector.RecordTransitionLatency(
+				nodeName, originalState, newStatus.CurrentState, durationSeconds)
+
+			sm.metricsCollector.UpdateNodeState(
+				nodeName, originalState, newStatus.CurrentState)
+		}
+	}
+
+	// Update CPU metrics if available and metrics collector is configured
+	if sm.metricsCollector != nil && data != nil {
+		var current, windowAvg float64
+
+		if cpu, ok := data["cpuUtilization"].(float64); ok {
+			current = cpu
+			newStatus.CPUUtilization = cpu
+		}
+
+		if avg, ok := data["windowAverageUtilization"].(float64); ok {
+			windowAvg = avg
+			newStatus.WindowAverageUtilization = avg
+		}
+
+		sm.metricsCollector.UpdateCPUMetrics(nodeName, current, windowAvg)
+	}
+
+	// Copy message from data if provided
+	if data != nil {
+		if message, ok := data["message"].(string); ok && message != "" {
+			newStatus.Message = message
+		}
+
+		// Copy cooldown end time if provided
+		if cooldownTime, ok := data["coolDownEndTime"].(time.Time); ok {
+			newStatus.CoolDownEndTime = cooldownTime
+		}
+
+		// Copy other status flags if provided
+		if requested, ok := data["specUpRequested"].(bool); ok {
+			newStatus.SpecUpRequested = requested
+		}
+
+		if completed, ok := data["specUpCompleted"].(bool); ok {
+			newStatus.SpecUpCompleted = completed
+		}
+
+		if healthCheck, ok := data["healthCheckPassed"].(bool); ok {
+			newStatus.HealthCheckPassed = healthCheck
+		}
 	}
 
 	// Update status in map
@@ -120,14 +177,16 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 
 	// Update the custom resource status
 	if err := sm.updateCRStatus(ctx, nodeName, newStatus); err != nil {
-		log.Printf("Failed to update CR status: %v", err)
+		log.Printf("Failed to update CR status for node %s: %v", nodeName, err)
+		// We don't return this error since the state machine update was successful
+		// The CR status update failure is logged but doesn't affect the state transition
 	}
 
 	return nil
 }
 
 // GetStatus returns the current status for a node
-func (sm *stateMachine) GetStatus(ctx context.Context, nodeName string) (*updaterDomain.ControlPlaneStatus, error) {
+func (sm *stateMachine) GetStatus(ctx context.Context, nodeName string) (*domain.ControlPlaneStatus, error) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -142,7 +201,7 @@ func (sm *stateMachine) GetStatus(ctx context.Context, nodeName string) (*update
 }
 
 // UpdateStatus updates the status for a node
-func (sm *stateMachine) UpdateStatus(ctx context.Context, nodeName string, status *updaterDomain.ControlPlaneStatus) error {
+func (sm *stateMachine) UpdateStatus(ctx context.Context, nodeName string, status *domain.ControlPlaneStatus) error {
 	if status == nil {
 		return common.InvalidInputError("status cannot be nil")
 	}
@@ -158,7 +217,7 @@ func (sm *stateMachine) UpdateStatus(ctx context.Context, nodeName string, statu
 }
 
 // updateCRStatus updates the control plane status in the custom resource
-func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, status *updaterDomain.ControlPlaneStatus) error {
+func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, status *domain.ControlPlaneStatus) error {
 	// Convert status to a map for the CR update
 	statusData := map[string]interface{}{
 		"controlPlaneNodeName":     nodeName,

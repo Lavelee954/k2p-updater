@@ -623,37 +623,3 @@ func (s *UpdaterService) recoveryLoop(ctx context.Context) {
 		}
 	}
 }
-
-// Add a new method for direct event creation
-func (s *UpdaterService) createDirectNodeEvents(ctx context.Context) {
-	log.Println("Creating direct events for all nodes")
-
-	s.nodesMutex.RLock()
-	nodes := make([]string, len(s.nodes))
-	copy(nodes, s.nodes)
-	s.nodesMutex.RUnlock()
-
-	for _, nodeName := range nodes {
-		// Get current CPU metrics
-		currentCPU, windowAvg, _ := s.GetNodeCPUUtilization(ctx, nodeName)
-
-		// Create direct event for this node
-		log.Printf("Creating direct event for node %s (CPU: %.2f%%, Avg: %.2f%%)",
-			nodeName, currentCPU, windowAvg)
-
-		err := s.resourceFactory.Event().NormalRecordWithNode(
-			ctx,
-			"updater",
-			nodeName,
-			"DirectNodeEvent",
-			"Direct event for node %s (CPU: %.2f%%, Window Avg: %.2f%%)",
-			nodeName, currentCPU, windowAvg,
-		)
-
-		if err != nil {
-			log.Printf("Failed to create direct event for node %s: %v", nodeName, err)
-		} else {
-			log.Printf("Successfully created direct event for node %s", nodeName)
-		}
-	}
-}

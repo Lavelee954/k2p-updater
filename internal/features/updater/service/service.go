@@ -31,7 +31,6 @@ type UpdaterService struct {
 	nodeDiscoverer      *NodeDiscoverer
 	kubeClient          kubernetes.Interface
 	recoveryManager     *RecoveryManager
-	metricsCollector    *MetricsCollector
 	metricsComponent    MetricsComponent
 
 	// Control structures
@@ -68,11 +67,8 @@ func NewUpdaterService(
 		ScaleTrigger:   config.ScaleThreshold,
 	}
 
-	// Create metrics collector
-	metricsCollector := NewMetricsCollector()
-
 	// Create state machine
-	stateMachine := NewStateMachine(resourceFactory, metricsCollector)
+	stateMachine := NewStateMachine(resourceFactory)
 
 	// Initialize metrics component
 	metricsComponent := NewMetricsComponent(metricsService, stateMachine, metricsConfig)
@@ -86,7 +82,6 @@ func NewUpdaterService(
 		healthVerifier:   healthVerifier,
 		resourceFactory:  resourceFactory,
 		kubeClient:       kubeClient,
-		metricsCollector: metricsCollector,
 		metricsComponent: metricsComponent,
 		stopChan:         make(chan struct{}),
 		nodes:            []string{},

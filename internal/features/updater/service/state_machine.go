@@ -24,24 +24,16 @@ type stateMachine struct {
 	// resourceFactory is used to update the custom resource status
 	resourceFactory *resource.Factory
 
-	// metricsCollector collects metrics about the state machine
-	metricsCollector *MetricsCollector
-
 	// mu protects concurrent access to the status map
 	mu sync.RWMutex
 }
 
 // NewStateMachine creates a new state machine
-func NewStateMachine(resourceFactory *resource.Factory, metricsCollector ...*MetricsCollector) domain.StateMachine {
+func NewStateMachine(resourceFactory *resource.Factory) domain.StateMachine {
 	sm := &stateMachine{
 		statusMap:       make(map[string]*domain.ControlPlaneStatus),
 		stateHandlers:   make(map[domain.State]domain.StateHandler),
 		resourceFactory: resourceFactory,
-	}
-
-	// Assign metrics collector if provided
-	if len(metricsCollector) > 0 && metricsCollector[0] != nil {
-		sm.metricsCollector = metricsCollector[0]
 	}
 
 	// Register state handlers
@@ -186,23 +178,6 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 	} else {
 		log.Printf("DEBUG: Node %s remains in state %s after event %s",
 			nodeName, status.CurrentState, event)
-	}
-
-	// Update CPU metrics if available and metrics collector is configured
-	if sm.metricsCollector != nil && data != nil {
-		var current, windowAvg float64
-
-		if cpu, ok := data["cpuUtilization"].(float64); ok {
-			current = cpu
-			newStatus.CPUUtilization = cpu
-		}
-
-		if avg, ok := data["windowAverageUtilization"].(float64); ok {
-			windowAvg = avg
-			newStatus.WindowAverageUtilization = avg
-		}
-
-		sm.metricsCollector.UpdateCPUMetrics(nodeName, current, windowAvg)
 	}
 
 	// Copy message from data if provided

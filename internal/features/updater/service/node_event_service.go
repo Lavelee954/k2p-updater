@@ -230,7 +230,7 @@ func (s *NodeEventService) updateNodeStatusInCR(ctx context.Context, nodeName st
 		nodeName, status.CPUUtilization, status.WindowAverageUtilization)
 
 	// Always use "master" as the node name for updater resource
-	err = s.resourceFactory.Status().UpdateGenericWithNode(ctx, domain.UpdateKey, "master", statusData)
+	err = s.resourceFactory.Status().UpdateGenericWithNode(ctx, domain.UpdateKey, domain.ResourceName, statusData)
 	if err != nil {
 		log.Printf("Failed to update CR status for node %s: %v", nodeName, err)
 	} else {

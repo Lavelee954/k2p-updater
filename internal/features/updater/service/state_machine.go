@@ -305,7 +305,7 @@ func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, sta
 	}
 
 	// Use "k2pupdater-master" as the resource name (from the CR snippet we can see the name format)
-	err := sm.resourceFactory.Status().UpdateGenericWithNode(ctx, domain.UpdateKey, "master", statusData)
+	err := sm.resourceFactory.Status().UpdateGenericWithNode(ctx, domain.UpdateKey, domain.ResourceName, statusData)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			log.Printf("Context canceled during CR status update: %v", err)

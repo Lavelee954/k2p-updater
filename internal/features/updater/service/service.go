@@ -120,7 +120,7 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 		startupEvent := s.resourceFactory.Event().NormalRecordWithNode(
 			ctx,
 			updaterDomain.UpdateKey,
-			"master",
+			updaterDomain.ResourceName,
 			string(updaterDomain.StatePendingVmSpecUp),
 			"K2P-Updater service starting with %d control plane nodes configured",
 			len(s.nodes),
@@ -151,7 +151,7 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 			nodesDiscoveredEvent := s.resourceFactory.Event().NormalRecordWithNode(
 				ctx,
 				updaterDomain.UpdateKey,
-				"master",
+				updaterDomain.ResourceName,
 				string(updaterDomain.StatePendingVmSpecUp),
 				"Discovered %d control plane nodes: %s",
 				len(s.nodes),

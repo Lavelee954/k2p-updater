@@ -18,7 +18,8 @@ const (
 )
 
 const (
-	UpdateKey string = "update"
+	UpdateKey    string = "update"
+	ResourceName string = "master"
 )
 
 // ControlPlaneStatus represents the current status of a control plane node

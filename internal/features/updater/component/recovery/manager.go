@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"k2p-updater/internal/features/updater/domain/interfaces"
-	"k2p-updater/internal/features/updater/domain/models"
 	"log"
 	"sync"
 	"time"
+
+	"k2p-updater/internal/features/updater/domain/interfaces"
+	"k2p-updater/internal/features/updater/domain/models"
 )
 
-// Manager RecoveryManager handles recovery from failed states
+// Manager implements interfaces.RecoveryManager
 type Manager struct {
 	stateMachine           interfaces.StateMachine
 	recoveryWaitPeriod     time.Duration
@@ -34,9 +35,8 @@ func NewRecoveryManager(stateMachine interfaces.StateMachine) interfaces.Recover
 
 // AttemptRecovery tries to recover a node from a failed state
 func (r *Manager) AttemptRecovery(ctx context.Context, nodeName string) error {
-	// Check for context cancellation
-	if ctx.Err() != nil {
-		return ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	// Get current node status
@@ -59,27 +59,15 @@ func (r *Manager) AttemptRecovery(ctx context.Context, nodeName string) error {
 	}
 
 	// Check recovery attempts limit
-	r.mu.RLock()
-	attempts := r.recoveryAttempts[nodeName]
-	r.mu.RUnlock()
-
+	attempts := r.getRecoveryAttempts(nodeName)
 	if attempts >= r.maxRecoveryAttempts {
 		log.Printf("Node %s has reached maximum recovery attempts (%d), manual intervention required",
 			nodeName, r.maxRecoveryAttempts)
 		return nil
 	}
 
-	// Check for context cancellation again
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
 	// Increment recovery attempts counter
-	r.mu.Lock()
-	r.recoveryAttempts[nodeName]++
-	attemptsCount := r.recoveryAttempts[nodeName]
-	r.mu.Unlock()
-
+	attemptsCount := r.incrementRecoveryAttempts(nodeName)
 	log.Printf("Attempting recovery for node %s (attempt %d of %d)",
 		nodeName, attemptsCount, r.maxRecoveryAttempts)
 
@@ -101,26 +89,38 @@ func (r *Manager) AttemptRecovery(ctx context.Context, nodeName string) error {
 	return nil
 }
 
+// getRecoveryAttempts gets the current recovery attempts count for a node
+func (r *Manager) getRecoveryAttempts(nodeName string) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.recoveryAttempts[nodeName]
+}
+
+// incrementRecoveryAttempts increments and returns the recovery attempts count
+func (r *Manager) incrementRecoveryAttempts(nodeName string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recoveryAttempts[nodeName]++
+	return r.recoveryAttempts[nodeName]
+}
+
 // ResetRecoveryCounter resets the recovery counter for a node
 func (r *Manager) ResetRecoveryCounter(nodeName string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	delete(r.recoveryAttempts, nodeName)
 }
 
 // CheckAllNodes attempts recovery for all nodes in failed state
 func (r *Manager) CheckAllNodes(ctx context.Context, nodes []string) {
-	// Check for context cancellation at the beginning
-	if ctx.Err() != nil {
-		log.Printf("Skipping recovery check due to context cancellation: %v", ctx.Err())
+	if err := ctx.Err(); err != nil {
+		log.Printf("Skipping recovery check due to context cancellation: %v", err)
 		return
 	}
 
 	for _, nodeName := range nodes {
-		// Check for context cancellation during iteration
-		if ctx.Err() != nil {
-			log.Printf("Context canceled during recovery check: %v", ctx.Err())
+		if err := ctx.Err(); err != nil {
+			log.Printf("Context canceled during recovery check: %v", err)
 			return
 		}
 

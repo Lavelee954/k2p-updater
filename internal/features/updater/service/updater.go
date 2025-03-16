@@ -71,26 +71,12 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 			return
 		}
 
-		// Add startup event
-		startupEvent := s.resourceFactory.Event().NormalRecordWithNode(
-			ctx,
-			models.UpdateKey,
-			models.ResourceName,
-			string(models.StatePendingVmSpecUp),
-			"K2P-Updater service starting with %d control plane nodes configured",
-			len(s.nodes),
-		)
-
-		if startupEvent != nil {
-			log.Printf("Warning: Failed to record application startup event: %v", startupEvent)
-		} else {
-			log.Printf("Successfully recorded application startup event")
+		// Record startup event
+		if err := s.recordStartupEvent(ctx); err != nil {
+			log.Printf("Warning: Failed to record application startup event: %v", err)
 		}
 
-		// Verify resource configurations
-		log.Println("Verifying resource configurations...")
-
-		// Get the list of nodes to monitor
+		// Discover control plane nodes
 		if err := s.discoverNodes(ctx); err != nil {
 			if errors.Is(err, context.Canceled) {
 				startErr = ctx.Err()
@@ -100,56 +86,78 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 			return
 		}
 
-		// Emit another event after node discovery to report actual node count
+		// Record nodes discovered event
 		if len(s.nodes) > 0 {
-			nodesDiscoveredEvent := s.resourceFactory.Event().NormalRecordWithNode(
-				ctx,
-				models.UpdateKey,
-				models.ResourceName,
-				string(models.StatePendingVmSpecUp),
-				"Discovered %d control plane nodes: %s",
-				len(s.nodes),
-				strings.Join(s.nodes, ", "),
-			)
-
-			if nodesDiscoveredEvent != nil {
-				log.Printf("Warning: Failed to record nodes discovered event: %v", nodesDiscoveredEvent)
-			} else {
-				log.Printf("Successfully recorded nodes discovered event")
+			if err := s.recordNodesDiscoveredEvent(ctx); err != nil {
+				log.Printf("Warning: Failed to record nodes discovered event: %v", err)
 			}
 		}
 
-		// Check context again before proceeding
-		if ctx.Err() != nil {
-			startErr = ctx.Err()
-			return
-		}
-
-		// Create a new independent background context that won't be affected by the parent
-		// This ensures our background processes continue running
+		// Create a new independent background context
 		serviceCtx, cancel := context.WithCancel(context.Background())
 		s.cancelFunc = cancel
 
-		// Initialize all nodes before starting background services
-		for _, nodeName := range s.nodes {
-			if err := s.initializeNode(serviceCtx, nodeName); err != nil {
-				log.Printf("Failed to initialize node %s: %v", nodeName, err)
-				// Continue with other nodes
-			}
-		}
+		// Initialize all nodes
+		s.initializeAllNodes(serviceCtx)
 
-		// Start background monitoring with explicit logging
+		// Start background monitoring
 		log.Println("Starting background monitoring loops...")
-
-		// Launch monitoring loops with the service context
-		go s.monitoringLoop(serviceCtx)
-		go s.cooldownLoop(serviceCtx)
-		go s.recoveryLoop(serviceCtx)
-
+		go s.runMonitoringLoop(serviceCtx)
+		go s.runCooldownLoop(serviceCtx)
+		go s.runRecoveryLoop(serviceCtx)
 		log.Println("All background monitoring loops initialized")
 	})
 
 	return startErr
+}
+
+// recordStartupEvent adds a startup event
+func (s *UpdaterService) recordStartupEvent(ctx context.Context) error {
+	event := s.resourceFactory.Event().NormalRecordWithNode(
+		ctx,
+		models.UpdateKey,
+		models.ResourceName,
+		string(models.StatePendingVmSpecUp),
+		"K2P-Updater service starting with %d control plane nodes configured",
+		len(s.nodes),
+	)
+
+	if event != nil {
+		return event
+	}
+
+	log.Printf("Successfully recorded application startup event")
+	return nil
+}
+
+// recordNodesDiscoveredEvent records the nodes discovery event
+func (s *UpdaterService) recordNodesDiscoveredEvent(ctx context.Context) error {
+	event := s.resourceFactory.Event().NormalRecordWithNode(
+		ctx,
+		models.UpdateKey,
+		models.ResourceName,
+		string(models.StatePendingVmSpecUp),
+		"Discovered %d control plane nodes: %s",
+		len(s.nodes),
+		strings.Join(s.nodes, ", "),
+	)
+
+	if event != nil {
+		return event
+	}
+
+	log.Printf("Successfully recorded nodes discovered event")
+	return nil
+}
+
+// initializeAllNodes initializes all discovered nodes
+func (s *UpdaterService) initializeAllNodes(ctx context.Context) {
+	for _, nodeName := range s.nodes {
+		if err := s.initializeNode(ctx, nodeName); err != nil {
+			log.Printf("Failed to initialize node %s: %v", nodeName, err)
+			// Continue with other nodes
+		}
+	}
 }
 
 // Stop stops the updater service
@@ -161,10 +169,10 @@ func (s *UpdaterService) Stop() {
 		s.cancelFunc()
 	}
 
-	// Close the stop channel to signal any goroutines using it
+	// Close the stop channel to signal any goroutines
 	close(s.stopChan)
 
-	// Wait a brief moment for goroutines to terminate
+	// Allow time for graceful shutdown
 	time.Sleep(100 * time.Millisecond)
 
 	log.Println("Updater service stopped")
@@ -177,13 +185,18 @@ func (s *UpdaterService) GetStateMachine() interfaces.StateMachine {
 
 // RequestSpecUp requests a spec up for a node
 func (s *UpdaterService) RequestSpecUp(ctx context.Context, nodeName string) error {
+	// Check context cancellation
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	// Get current node status
 	status, err := s.stateMachine.GetStatus(ctx, nodeName)
 	if err != nil {
 		return fmt.Errorf("failed to get node status: %w", err)
 	}
 
-	// Only allow spec up from appropriate states
+	// Validate state is appropriate for spec up
 	if status.CurrentState != models.StateInProgressVmSpecUp &&
 		status.CurrentState != models.StateMonitoring {
 		return fmt.Errorf("node %s is in %s state, cannot request spec up",
@@ -199,28 +212,35 @@ func (s *UpdaterService) RequestSpecUp(ctx context.Context, nodeName string) err
 	// Request VM spec up from backend
 	success, err := s.backendClient.RequestVMSpecUp(ctx, nodeName, currentCPU)
 	if err != nil {
-		// Trigger failure event
-		data := map[string]interface{}{
-			"error": err.Error(),
-		}
-		if err2 := s.stateMachine.HandleEvent(ctx, nodeName, models.EventSpecUpFailed, data); err2 != nil {
-			log.Printf("Failed to handle spec up failure event: %v", err2)
+		// Handle failure
+		if err := s.handleSpecUpFailure(ctx, nodeName, err.Error()); err != nil {
+			log.Printf("Failed to handle spec up failure event: %v", err)
 		}
 		return fmt.Errorf("backend request failed: %w", err)
 	}
 
 	if !success {
-		// Trigger failure event
-		data := map[string]interface{}{
-			"error": "Backend returned unsuccessful response",
-		}
-		if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventSpecUpFailed, data); err != nil {
+		// Handle unsuccessful response
+		if err := s.handleSpecUpFailure(ctx, nodeName, "Backend returned unsuccessful response"); err != nil {
 			log.Printf("Failed to handle spec up failure event: %v", err)
 		}
 		return fmt.Errorf("backend returned unsuccessful response")
 	}
 
-	// Trigger success event
+	// Handle success
+	return s.handleSpecUpSuccess(ctx, nodeName, currentCPU)
+}
+
+// handleSpecUpFailure handles spec up failure events
+func (s *UpdaterService) handleSpecUpFailure(ctx context.Context, nodeName, errorMsg string) error {
+	data := map[string]interface{}{
+		"error": errorMsg,
+	}
+	return s.stateMachine.HandleEvent(ctx, nodeName, models.EventSpecUpFailed, data)
+}
+
+// handleSpecUpSuccess handles successful spec up requests
+func (s *UpdaterService) handleSpecUpSuccess(ctx context.Context, nodeName string, currentCPU float64) error {
 	data := map[string]interface{}{
 		"cpuUtilization": currentCPU,
 	}
@@ -228,19 +248,23 @@ func (s *UpdaterService) RequestSpecUp(ctx context.Context, nodeName string) err
 		log.Printf("Failed to handle spec up requested event: %v", err)
 		return fmt.Errorf("failed to update state: %w", err)
 	}
-
 	return nil
 }
 
 // VerifySpecUpHealth verifies the health of a node after spec up
 func (s *UpdaterService) VerifySpecUpHealth(ctx context.Context, nodeName string) (bool, error) {
+	// Check context cancellation
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+
 	// Get current node status
 	status, err := s.stateMachine.GetStatus(ctx, nodeName)
 	if err != nil {
 		return false, fmt.Errorf("failed to get node status: %w", err)
 	}
 
-	// Validate that we're in an appropriate state to check health
+	// Validate state is appropriate for health check
 	if status.CurrentState != models.StateInProgressVmSpecUp {
 		return false, fmt.Errorf("cannot verify health for node %s in %s state",
 			nodeName, status.CurrentState)
@@ -268,14 +292,13 @@ func (s *UpdaterService) VerifySpecUpHealth(ctx context.Context, nodeName string
 		"healthCheckPassed": healthy,
 	}
 
-	if healthy {
-		if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventHealthCheckPassed, data); err != nil {
-			log.Printf("Failed to handle health check passed event: %v", err)
-		}
-	} else {
-		if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventHealthCheckFailed, data); err != nil {
-			log.Printf("Failed to handle health check failed event: %v", err)
-		}
+	eventType := models.EventHealthCheckPassed
+	if !healthy {
+		eventType = models.EventHealthCheckFailed
+	}
+
+	if err := s.stateMachine.HandleEvent(ctx, nodeName, eventType, data); err != nil {
+		log.Printf("Failed to handle health check event: %v", err)
 	}
 
 	return healthy, nil
@@ -301,6 +324,10 @@ func (s *UpdaterService) GetNodeCPUUtilization(ctx context.Context, nodeName str
 
 // IsCooldownActive checks if a node is in cooldown period
 func (s *UpdaterService) IsCooldownActive(ctx context.Context, nodeName string) (bool, time.Duration, error) {
+	if ctx.Err() != nil {
+		return false, 0, ctx.Err()
+	}
+
 	// Get current node status
 	status, err := s.stateMachine.GetStatus(ctx, nodeName)
 	if err != nil {
@@ -336,7 +363,6 @@ func (s *UpdaterService) discoverNodes(ctx context.Context) error {
 
 	if len(discoveredNodes) == 0 {
 		log.Printf("Warning: No control plane nodes found. Using nodes from configuration if available.")
-		// You could add a fallback mechanism here to use nodes defined in configuration
 	}
 
 	// Update the nodes list
@@ -348,6 +374,10 @@ func (s *UpdaterService) discoverNodes(ctx context.Context) error {
 
 // initializeNode initializes a node in the state machine
 func (s *UpdaterService) initializeNode(ctx context.Context, nodeName string) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	// Start in cooldown state
 	cooldownEnd := time.Now().Add(s.config.CooldownPeriod)
 
@@ -358,7 +388,7 @@ func (s *UpdaterService) initializeNode(ctx context.Context, nodeName string) er
 		// Continue with zero values
 	}
 
-	// Create initial status with CoolDown state explicitly
+	// Create initial status
 	initialStatus := &models.ControlPlaneStatus{
 		NodeName:                 nodeName,
 		CurrentState:             models.StateCoolDown,
@@ -369,12 +399,12 @@ func (s *UpdaterService) initializeNode(ctx context.Context, nodeName string) er
 		CoolDownEndTime:          cooldownEnd,
 	}
 
-	// First update the status directly to ensure it starts in the CoolDown state
+	// Set initial state directly
 	if err := s.stateMachine.UpdateStatus(ctx, nodeName, initialStatus); err != nil {
 		log.Printf("Warning: Failed to directly set initial state to CoolDown for %s: %v", nodeName, err)
 	}
 
-	// Then trigger the initialize event to handle any additional setup
+	// Then trigger initialize event for additional setup
 	data := map[string]interface{}{
 		"cpuUtilization":           currentCPU,
 		"windowAverageUtilization": windowAvg,
@@ -382,7 +412,6 @@ func (s *UpdaterService) initializeNode(ctx context.Context, nodeName string) er
 		"initialState":             models.StateCoolDown,
 	}
 
-	// Initialize the node in the state machine
 	if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventInitialize, data); err != nil {
 		return fmt.Errorf("failed to initialize node: %w", err)
 	}
@@ -393,8 +422,8 @@ func (s *UpdaterService) initializeNode(ctx context.Context, nodeName string) er
 	return nil
 }
 
-// monitoringLoop periodically checks CPU utilization and triggers events
-func (s *UpdaterService) monitoringLoop(ctx context.Context) {
+// runMonitoringLoop runs the main monitoring loop for CPU utilization
+func (s *UpdaterService) runMonitoringLoop(ctx context.Context) {
 	log.Println("Starting monitoring loop execution")
 
 	monitoringTicker := time.NewTicker(s.config.MonitoringInterval)
@@ -410,31 +439,23 @@ func (s *UpdaterService) monitoringLoop(ctx context.Context) {
 			log.Println("Monitoring loop context canceled")
 			return
 		case <-monitoringTicker.C:
-			// Skip operations if context is done
-			if ctx.Err() != nil {
-				continue
+			if ctx.Err() == nil {
+				log.Println("Monitoring ticker triggered, updating node metrics")
+				s.updateAllNodeMetrics(ctx)
 			}
-
-			log.Println("Monitoring ticker triggered, updating node metrics")
-			s.updateAllNodeMetrics(ctx)
-
 		case <-statusUpdateTicker.C:
-			// Skip operations if context is done
-			if ctx.Err() != nil {
-				continue
+			if ctx.Err() == nil {
+				log.Println("Status update ticker triggered, updating node status")
+				s.updateAllNodeStatus(ctx)
 			}
-
-			log.Println("Status update ticker triggered, updating node status")
-			s.updateAllNodeStatus(ctx)
 		}
 	}
 }
 
-// cooldownLoop periodically updates cooldown status
-func (s *UpdaterService) cooldownLoop(ctx context.Context) {
+// runCooldownLoop runs the cooldown monitoring loop
+func (s *UpdaterService) runCooldownLoop(ctx context.Context) {
 	log.Println("Starting cooldown loop")
 
-	// Change to 1 minute interval to align with our CR update frequency
 	cooldownTicker := time.NewTicker(1 * time.Minute)
 	defer cooldownTicker.Stop()
 
@@ -447,22 +468,44 @@ func (s *UpdaterService) cooldownLoop(ctx context.Context) {
 			log.Println("Cooldown loop received stop signal")
 			return
 		case <-cooldownTicker.C:
-			// Check context before performing operations
-			if ctx.Err() != nil {
-				log.Println("Skipping cooldown update due to canceled context")
-				return
+			if ctx.Err() == nil {
+				s.updateAllCooldowns(ctx)
 			}
+		}
+	}
+}
 
-			s.updateAllCooldowns(ctx)
+// runRecoveryLoop runs the recovery monitoring loop
+func (s *UpdaterService) runRecoveryLoop(ctx context.Context) {
+	log.Println("Starting recovery loop")
+
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Recovery loop context canceled")
+			return
+		case <-s.stopChan:
+			log.Println("Recovery loop received stop signal")
+			return
+		case <-ticker.C:
+			if ctx.Err() == nil {
+				s.nodesMutex.RLock()
+				nodesToCheck := make([]string, len(s.nodes))
+				copy(nodesToCheck, s.nodes)
+				s.nodesMutex.RUnlock()
+
+				s.recoveryManager.CheckAllNodes(ctx, nodesToCheck)
+			}
 		}
 	}
 }
 
 // updateAllNodeStatus updates the status messages for all nodes
 func (s *UpdaterService) updateAllNodeStatus(ctx context.Context) {
-	// Check context cancellation at the beginning
 	if ctx.Err() != nil {
-		log.Printf("Skipping node status update due to context cancellation: %v", ctx.Err())
 		return
 	}
 
@@ -473,9 +516,8 @@ func (s *UpdaterService) updateAllNodeStatus(ctx context.Context) {
 	s.nodesMutex.RUnlock()
 
 	for _, nodeName := range nodesToUpdate {
-		// Check for context cancellation during iteration
 		if ctx.Err() != nil {
-			log.Printf("Context canceled during node status update: %v", ctx.Err())
+			log.Printf("Context canceled during node status update")
 			return
 		}
 
@@ -501,7 +543,7 @@ func (s *UpdaterService) updateAllNodeStatus(ctx context.Context) {
 			}
 		}
 
-		// Add current time for timestamp
+		// Prepare data for update
 		data := map[string]interface{}{
 			"cpuUtilization":           currentCPU,
 			"windowAverageUtilization": windowAvg,
@@ -509,27 +551,25 @@ func (s *UpdaterService) updateAllNodeStatus(ctx context.Context) {
 		}
 
 		// Update status based on current state
+		var eventType models.Event
 		switch state {
 		case models.StateMonitoring:
+			eventType = models.EventMonitoringStatus
 			log.Printf("Updating monitoring status for node %s", nodeName)
-			if ctx.Err() != nil {
-				log.Printf("Context canceled before updating monitoring status: %v", ctx.Err())
-				return
-			}
-			if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventMonitoringStatus, data); err != nil {
-				log.Printf("Failed to update monitoring status: %v", err)
-			}
 		case models.StateCoolDown:
+			eventType = models.EventCooldownStatus
 			log.Printf("Updating cooldown status for node %s", nodeName)
-			if ctx.Err() != nil {
-				log.Printf("Context canceled before updating cooldown status: %v", ctx.Err())
-				return
-			}
-			if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventCooldownStatus, data); err != nil {
-				log.Printf("Failed to update cooldown status: %v", err)
-			}
 		default:
 			log.Printf("Node %s is in %s state, no status update needed", nodeName, state)
+			continue
+		}
+
+		if ctx.Err() != nil {
+			return
+		}
+
+		if err := s.stateMachine.HandleEvent(ctx, nodeName, eventType, data); err != nil {
+			log.Printf("Failed to update status: %v", err)
 		}
 	}
 	log.Printf("Finished periodic status update for all nodes")
@@ -537,9 +577,7 @@ func (s *UpdaterService) updateAllNodeStatus(ctx context.Context) {
 
 // updateAllNodeMetrics updates metrics for all nodes and checks for threshold exceedance
 func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
-	// Check context cancellation at the beginning
 	if ctx.Err() != nil {
-		log.Printf("Skipping node metrics update due to context cancellation: %v", ctx.Err())
 		return
 	}
 
@@ -548,30 +586,20 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 	copy(nodesToUpdate, s.nodes)
 	s.nodesMutex.RUnlock()
 
-	// First, acquire all necessary information atomically
+	// Get information about nodes currently spec'ing up
 	specingUp, specingUpNode, err := s.coordinator.IsAnyNodeSpecingUp(ctx, nodesToUpdate)
-	if err != nil {
-		if ctx.Err() != nil {
-			log.Printf("Context canceled during specUp check: %v", ctx.Err())
-			return
-		}
+	if err != nil && ctx.Err() == nil {
 		log.Printf("Failed to check ongoing spec up: %v", err)
 	}
 
-	// Process each node with the consistent information we retrieved
+	// Process each node with the consistent information
 	for _, nodeName := range nodesToUpdate {
-		// Create a local context that can be canceled independently for this node
-		nodeCtx, cancelNode := context.WithCancel(ctx)
-		defer cancelNode() // Ensure this is called when we exit
-
-		// Check for context cancellation during iteration
-		if nodeCtx.Err() != nil {
-			log.Printf("Context canceled during node metrics update: %v", nodeCtx.Err())
+		if ctx.Err() != nil {
 			return
 		}
 
 		// Get current state
-		state, err := s.stateMachine.GetCurrentState(nodeCtx, nodeName)
+		state, err := s.stateMachine.GetCurrentState(ctx, nodeName)
 		if err != nil {
 			log.Printf("Failed to get state for node %s: %v", nodeName, err)
 			continue
@@ -579,125 +607,96 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 
 		// For nodes in monitoring state, check CPU threshold
 		if state == models.StateMonitoring {
-			thresholdExceeded, currentCPU, windowAvg, err := s.metricsComponent.CheckCPUThresholdExceeded(nodeCtx, nodeName)
-			if err != nil {
-				log.Printf("Failed to check CPU threshold for node %s: %v", nodeName, err)
-				continue
-			}
-
-			// Prepare event data
-			data := map[string]interface{}{
-				"cpuUtilization":           currentCPU,
-				"windowAverageUtilization": windowAvg,
-			}
-
-			// Using the atomic check result from earlier
-			if thresholdExceeded && !specingUp {
-				if nodeCtx.Err() != nil {
-					log.Printf("Context canceled before handling threshold event: %v", nodeCtx.Err())
-					return
-				}
-
-				// Try to transition to spec-up state
-				// First, double check if any node started a spec-up since our earlier check
-				currentSpecingUp, currentSpecingNode, checkErr := s.coordinator.IsAnyNodeSpecingUp(nodeCtx, nodesToUpdate)
-				if checkErr != nil {
-					log.Printf("Failed to perform final spec-up check: %v", checkErr)
-					continue
-				}
-
-				if !currentSpecingUp {
-					// Still no node spec'ing up, we can proceed
-					if err := s.stateMachine.HandleEvent(nodeCtx, nodeName, models.EventThresholdExceeded, data); err != nil {
-						log.Printf("Failed to handle threshold exceeded event: %v", err)
-					} else {
-						log.Printf("Node %s triggered for spec up (CPU: %.2f%%)", nodeName, windowAvg)
-						// Update local tracking to prevent multiple nodes from being triggered
-						specingUp = true
-						specingUpNode = nodeName
-					}
-				} else {
-					log.Printf("Node %s threshold exceeded but another node (%s) started spec-up during processing",
-						nodeName, currentSpecingNode)
-				}
-			} else if thresholdExceeded {
-				log.Printf("Node %s exceeded threshold (%.2f%%) but waiting for %s to complete",
-					nodeName, windowAvg, specingUpNode)
-				// Just update the metrics
-				if nodeCtx.Err() != nil {
-					log.Printf("Context canceled before updating metrics: %v", nodeCtx.Err())
-					return
-				}
-				if err := s.stateMachine.HandleEvent(nodeCtx, nodeName, models.EventInitialize, data); err != nil {
-					log.Printf("Failed to update metrics: %v", err)
-				}
-			} else {
-				// Just update the metrics
-				if nodeCtx.Err() != nil {
-					log.Printf("Context canceled before updating metrics: %v", nodeCtx.Err())
-					return
-				}
-				if err := s.stateMachine.HandleEvent(nodeCtx, nodeName, models.EventInitialize, data); err != nil {
-					log.Printf("Failed to update metrics: %v", err)
-				}
-			}
+			s.checkNodeThreshold(ctx, nodeName, specingUp, specingUpNode, nodesToUpdate)
 		} else if state == models.StatePendingVmSpecUp || state == models.StateCoolDown {
-			// For nodes in pending or cooldown state, just update their metrics
-			currentCPU, windowAvg, _ := s.metricsComponent.GetNodeCPUMetrics(nodeName)
-
-			data := map[string]interface{}{
-				"cpuUtilization":           currentCPU,
-				"windowAverageUtilization": windowAvg,
-			}
-
-			if nodeCtx.Err() != nil {
-				log.Printf("Context canceled before updating metrics: %v", nodeCtx.Err())
-				return
-			}
-			if err := s.stateMachine.HandleEvent(nodeCtx, nodeName, models.EventInitialize, data); err != nil {
-				log.Printf("Failed to update metrics: %v", err)
-			}
+			// For other states, just update metrics
+			s.updateNodeMetricsOnly(ctx, nodeName)
 		}
 	}
 }
 
-// recoveryLoop periodically checks for nodes in failed state and attempts recovery
-func (s *UpdaterService) recoveryLoop(ctx context.Context) {
-	log.Println("Starting recovery loop")
+// checkNodeThreshold checks if a node's CPU threshold is exceeded and handles accordingly
+func (s *UpdaterService) checkNodeThreshold(ctx context.Context, nodeName string,
+	specingUp bool, specingUpNode string, allNodes []string) {
 
-	ticker := time.NewTicker(1 * time.Minute)
-	defer ticker.Stop()
+	if ctx.Err() != nil {
+		return
+	}
 
-	for {
-		select {
-		case <-ctx.Done():
-			log.Println("Recovery loop context canceled")
+	thresholdExceeded, currentCPU, windowAvg, err := s.metricsComponent.CheckCPUThresholdExceeded(ctx, nodeName)
+	if err != nil {
+		log.Printf("Failed to check CPU threshold for node %s: %v", nodeName, err)
+		return
+	}
+
+	// Prepare data for updates
+	data := map[string]interface{}{
+		"cpuUtilization":           currentCPU,
+		"windowAverageUtilization": windowAvg,
+	}
+
+	if thresholdExceeded && !specingUp {
+		if ctx.Err() != nil {
 			return
-		case <-s.stopChan:
-			log.Println("Recovery loop received stop signal")
-			return
-		case <-ticker.C:
-			// Check context before performing operations
-			if ctx.Err() != nil {
-				log.Println("Skipping recovery check due to canceled context")
-				return
-			}
-
-			s.nodesMutex.RLock()
-			nodesToCheck := make([]string, len(s.nodes))
-			copy(nodesToCheck, s.nodes)
-			s.nodesMutex.RUnlock()
-
-			s.recoveryManager.CheckAllNodes(ctx, nodesToCheck)
 		}
+
+		// Double check if any node started a spec-up since our earlier check
+		currentSpecingUp, currentSpecingNode, checkErr := s.coordinator.IsAnyNodeSpecingUp(ctx, allNodes)
+		if checkErr != nil {
+			log.Printf("Failed to perform final spec-up check: %v", checkErr)
+			return
+		}
+
+		if !currentSpecingUp {
+			// No node spec'ing up, we can proceed
+			if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventThresholdExceeded, data); err != nil {
+				log.Printf("Failed to handle threshold exceeded event: %v", err)
+			} else {
+				log.Printf("Node %s triggered for spec up (CPU: %.2f%%)", nodeName, windowAvg)
+			}
+		} else {
+			log.Printf("Node %s threshold exceeded but another node (%s) started spec-up during processing",
+				nodeName, currentSpecingNode)
+		}
+	} else if thresholdExceeded {
+		log.Printf("Node %s exceeded threshold (%.2f%%) but waiting for %s to complete",
+			nodeName, windowAvg, specingUpNode)
+		s.updateNodeData(ctx, nodeName, data)
+	} else {
+		// Just update the metrics
+		s.updateNodeData(ctx, nodeName, data)
+	}
+}
+
+// updateNodeMetricsOnly updates only the node metrics without threshold checks
+func (s *UpdaterService) updateNodeMetricsOnly(ctx context.Context, nodeName string) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	currentCPU, windowAvg, _ := s.metricsComponent.GetNodeCPUMetrics(nodeName)
+	data := map[string]interface{}{
+		"cpuUtilization":           currentCPU,
+		"windowAverageUtilization": windowAvg,
+	}
+
+	s.updateNodeData(ctx, nodeName, data)
+}
+
+// updateNodeData handles updating node data with error handling
+func (s *UpdaterService) updateNodeData(ctx context.Context, nodeName string, data map[string]interface{}) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventInitialize, data); err != nil {
+		log.Printf("Failed to update metrics for node %s: %v", nodeName, err)
 	}
 }
 
 // updateAllCooldowns updates cooldown status for all nodes
 func (s *UpdaterService) updateAllCooldowns(ctx context.Context) {
-	// Check context cancellation at the beginning
 	if ctx.Err() != nil {
-		log.Printf("Skipping cooldown update due to context cancellation: %v", ctx.Err())
 		return
 	}
 
@@ -708,17 +707,15 @@ func (s *UpdaterService) updateAllCooldowns(ctx context.Context) {
 	copy(nodesToUpdate, s.nodes)
 	s.nodesMutex.RUnlock()
 
-	// Track if we've already processed a node to avoid multiple updates
+	// Track processed nodes to avoid duplicates
 	processedNodes := make(map[string]bool)
 
 	for _, nodeName := range nodesToUpdate {
-		// Check for context cancellation during iteration
 		if ctx.Err() != nil {
-			log.Printf("Context canceled during cooldown update: %v", ctx.Err())
 			return
 		}
 
-		// Skip if already processed in this cycle
+		// Skip if already processed
 		if processedNodes[nodeName] {
 			log.Printf("Node %s already processed in this cooldown cycle, skipping", nodeName)
 			continue
@@ -738,76 +735,88 @@ func (s *UpdaterService) updateAllCooldowns(ctx context.Context) {
 			continue
 		}
 
-		// Get current status
-		status, err := s.stateMachine.GetStatus(ctx, nodeName)
-		if err != nil {
-			log.Printf("Failed to get status for node %s: %v", nodeName, err)
-			continue
-		}
-
-		// Check if cooldown has ended
-		if !status.CoolDownEndTime.IsZero() && time.Now().After(status.CoolDownEndTime) {
-			log.Printf("Cooldown period ended for node %s", nodeName)
-
-			// Get current CPU utilization for the transition
-			currentCPU, windowAvg, err := s.GetNodeCPUUtilization(ctx, nodeName)
-			if err != nil {
-				log.Printf("Failed to get CPU utilization for %s: %v", nodeName, err)
-				currentCPU = status.CPUUtilization
-				windowAvg = status.WindowAverageUtilization
-			}
-
-			// Trigger cooldown ended event
-			data := map[string]interface{}{
-				"cpuUtilization":           currentCPU,
-				"windowAverageUtilization": windowAvg,
-			}
-
-			if ctx.Err() != nil {
-				log.Printf("Context canceled before handling cooldown ended event: %v", ctx.Err())
-				return
-			}
-			if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventCooldownEnded, data); err != nil {
-				log.Printf("Failed to handle cooldown ended event: %v", err)
-			} else {
-				// Create a single event recording the transition
-				if ctx.Err() != nil {
-					log.Printf("Context canceled before recording event: %v", ctx.Err())
-					return
-				}
-				s.resourceFactory.Event().NormalRecordWithNode(
-					ctx,
-					models.UpdateKey,
-					nodeName,
-					string(models.StatePendingVmSpecUp),
-					"Node %s cooldown period ended, transitioning to monitoring state",
-					nodeName,
-				)
-			}
-		} else {
-			// Only update if more than 30 seconds have passed since last update
-			timeRemaining := time.Until(status.CoolDownEndTime)
-			if timeRemaining < 0 {
-				timeRemaining = 0
-			}
-
-			// Only update if more than 30 seconds have passed since last update
-			if time.Since(status.LastTransitionTime) > 30*time.Second {
-				data := map[string]interface{}{
-					"cpuUtilization":           status.CPUUtilization,
-					"windowAverageUtilization": status.WindowAverageUtilization,
-				}
-
-				if ctx.Err() != nil {
-					log.Printf("Context canceled before updating cooldown message: %v", ctx.Err())
-					return
-				}
-				if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventCooldownStatus, data); err != nil {
-					log.Printf("Failed to update cooldown message: %v", err)
-				}
-			}
-		}
+		s.processCooldownNode(ctx, nodeName)
 	}
 
 	log.Printf("Completed cooldown update check for all nodes")
+}
+
+// processCooldownNode processes a single node in cooldown state
+func (s *UpdaterService) processCooldownNode(ctx context.Context, nodeName string) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	// Get current status
+	status, err := s.stateMachine.GetStatus(ctx, nodeName)
+	if err != nil {
+		log.Printf("Failed to get status for node %s: %v", nodeName, err)
+		return
+	}
+
+	// Check if cooldown has ended
+	if !status.CoolDownEndTime.IsZero() && time.Now().After(status.CoolDownEndTime) {
+		s.handleCooldownEnded(ctx, nodeName, status)
+	} else {
+		// Only update message if significant time has passed
+		if time.Since(status.LastTransitionTime) > 30*time.Second {
+			data := map[string]interface{}{
+				"cpuUtilization":           status.CPUUtilization,
+				"windowAverageUtilization": status.WindowAverageUtilization,
+			}
+
+			if ctx.Err() != nil {
+				return
+			}
+
+			if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventCooldownStatus, data); err != nil {
+				log.Printf("Failed to update cooldown message: %v", err)
+			}
+		}
+	}
+}
+
+// handleCooldownEnded handles when a node's cooldown period has ended
+func (s *UpdaterService) handleCooldownEnded(ctx context.Context, nodeName string, status *models.ControlPlaneStatus) {
+	if ctx.Err() != nil {
+		return
+	}
+
+	log.Printf("Cooldown period ended for node %s", nodeName)
+
+	// Get current CPU utilization for the transition
+	currentCPU, windowAvg, err := s.GetNodeCPUUtilization(ctx, nodeName)
+	if err != nil {
+		log.Printf("Failed to get CPU utilization for %s: %v", nodeName, err)
+		currentCPU = status.CPUUtilization
+		windowAvg = status.WindowAverageUtilization
+	}
+
+	// Trigger cooldown ended event
+	data := map[string]interface{}{
+		"cpuUtilization":           currentCPU,
+		"windowAverageUtilization": windowAvg,
+	}
+
+	if ctx.Err() != nil {
+		return
+	}
+
+	if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventCooldownEnded, data); err != nil {
+		log.Printf("Failed to handle cooldown ended event: %v", err)
+	} else {
+		// Record the transition event
+		if ctx.Err() != nil {
+			return
+		}
+
+		s.resourceFactory.Event().NormalRecordWithNode(
+			ctx,
+			models.UpdateKey,
+			nodeName,
+			string(models.StateMonitoring),
+			"Node %s cooldown period ended, transitioning to monitoring state",
+			nodeName,
+		)
+	}
 }

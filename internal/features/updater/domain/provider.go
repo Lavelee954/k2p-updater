@@ -24,6 +24,9 @@ type Provider interface {
 
 	// IsCooldownActive checks if a node is in cooldown period
 	IsCooldownActive(ctx context.Context, nodeName string) (bool, time.Duration, error)
+
+	// Stop method for clean shutdown
+	Stop()
 }
 
 // BackendClient defines the interface for communicating with the backend API

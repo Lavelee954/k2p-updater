@@ -131,7 +131,7 @@ func (h *failedHandler) OnExit(ctx context.Context, status *models.ControlPlaneS
 		ctx,
 		models.UpdateKey,
 		status.NodeName,
-		"RecoveryFromFailure",
+		string(models.StateFailedVmSpecUp),
 		"Node %s recovering from failed state, transitioning to PendingVmSpecUp",
 		status.NodeName,
 	)

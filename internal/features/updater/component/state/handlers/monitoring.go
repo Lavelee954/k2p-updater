@@ -211,7 +211,7 @@ func (h *monitoringHandler) OnExit(ctx context.Context, status *models.ControlPl
 		ctx,
 		models.UpdateKey,
 		status.NodeName,
-		"TransitionFromMonitoring",
+		string(models.StatePendingVmSpecUp),
 		"Node %s transitioning from Monitoring state with CPU utilization at %.2f%%",
 		status.NodeName,
 		status.WindowAverageUtilization,

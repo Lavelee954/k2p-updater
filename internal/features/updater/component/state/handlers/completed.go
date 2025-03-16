@@ -94,7 +94,7 @@ func (h *completedHandler) OnEnter(ctx context.Context, status *models.ControlPl
 		ctx,
 		models.UpdateKey,
 		status.NodeName,
-		"CompletedVmSpecUp",
+		string(models.StateCompletedVmSpecUp),
 		"Node %s completed VM spec up process successfully",
 		status.NodeName,
 	)

@@ -209,7 +209,7 @@ func (h *coolDownHandler) OnExit(ctx context.Context, status *models.ControlPlan
 		ctx,
 		models.UpdateKey,
 		status.NodeName,
-		"ExitingCooldown",
+		string(models.StatePendingVmSpecUp),
 		"Node %s exiting cooldown period after %.1f minutes",
 		status.NodeName,
 		time.Since(status.LastTransitionTime).Minutes(),

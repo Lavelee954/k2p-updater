@@ -136,7 +136,7 @@ func (h *pendingHandler) OnExit(ctx context.Context, status *models.ControlPlane
 		ctx,
 		models.UpdateKey,
 		status.NodeName,
-		"ExitingPendingState",
+		string(models.StatePendingVmSpecUp),
 		"Node %s exiting pending state to begin active operations",
 		status.NodeName,
 	)

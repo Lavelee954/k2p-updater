@@ -116,7 +116,7 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *models.ControlPl
 				ctx,
 				models.UpdateKey,
 				status.NodeName,
-				string(models.StateMonitoring),
+				string(models.StatePendingVmSpecUp),
 				"Node %s periodic monitoring report (10min): CPU current %.2f%%, window avg %.2f%%",
 				status.NodeName,
 				newStatus.CPUUtilization,

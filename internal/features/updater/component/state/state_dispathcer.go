@@ -1,4 +1,3 @@
-// state_dispatcher.go
 package state
 
 import (

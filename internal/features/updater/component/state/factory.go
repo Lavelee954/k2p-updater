@@ -1,21 +1,21 @@
 package state
 
 import (
+	handlers2 "k2p-updater/internal/features/updater/component/state/handlers"
 	"k2p-updater/internal/features/updater/domain/interfaces"
 	"k2p-updater/internal/features/updater/domain/models"
-	"k2p-updater/internal/features/updater/state/handlers"
 	"k2p-updater/pkg/resource"
 )
 
 // CreateStateHandlers creates the default set of state handlers
 func CreateStateHandlers(resourceFactory *resource.Factory) map[models.State]interfaces.StateHandler {
 	return map[models.State]interfaces.StateHandler{
-		models.StatePendingVmSpecUp:    handlers.NewPendingHandler(resourceFactory),
-		models.StateMonitoring:         handlers.NewMonitoringHandler(resourceFactory),
-		models.StateInProgressVmSpecUp: handlers.NewInProgressHandler(resourceFactory),
-		models.StateCompletedVmSpecUp:  handlers.NewCompletedHandler(resourceFactory),
-		models.StateFailedVmSpecUp:     handlers.NewFailedHandler(resourceFactory),
-		models.StateCoolDown:           handlers.NewCoolDownHandler(resourceFactory),
+		models.StatePendingVmSpecUp:    handlers2.NewPendingHandler(resourceFactory),
+		models.StateMonitoring:         handlers2.NewMonitoringHandler(resourceFactory),
+		models.StateInProgressVmSpecUp: handlers2.NewInProgressHandler(resourceFactory),
+		models.StateCompletedVmSpecUp:  handlers2.NewCompletedHandler(resourceFactory),
+		models.StateFailedVmSpecUp:     handlers2.NewFailedHandler(resourceFactory),
+		models.StateCoolDown:           handlers2.NewCoolDownHandler(resourceFactory),
 	}
 }
 

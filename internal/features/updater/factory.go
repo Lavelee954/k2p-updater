@@ -3,22 +3,22 @@ package updater
 import (
 	"context"
 	"fmt"
+	"k2p-updater/internal/features/updater/component/backend"
+	coordination2 "k2p-updater/internal/features/updater/component/coordination"
+	"k2p-updater/internal/features/updater/component/health"
+	"k2p-updater/internal/features/updater/component/metrics"
+	"k2p-updater/internal/features/updater/component/recovery"
+	resourceUpdater "k2p-updater/internal/features/updater/component/resource"
+	"k2p-updater/internal/features/updater/component/state"
 	"net/http"
 	"time"
 
 	"k2p-updater/cmd/app"
 	exporterDomain "k2p-updater/internal/features/exporter/domain"
 	metricDomain "k2p-updater/internal/features/metric/domain"
-	"k2p-updater/internal/features/updater/backend"
-	"k2p-updater/internal/features/updater/coordination"
 	"k2p-updater/internal/features/updater/domain/interfaces"
 	"k2p-updater/internal/features/updater/domain/models"
-	"k2p-updater/internal/features/updater/health"
-	"k2p-updater/internal/features/updater/metrics"
-	"k2p-updater/internal/features/updater/recovery"
-	resourceUpdater "k2p-updater/internal/features/updater/resource"
 	"k2p-updater/internal/features/updater/service"
-	"k2p-updater/internal/features/updater/state"
 	"k2p-updater/pkg/resource"
 
 	"k8s.io/client-go/kubernetes"
@@ -90,12 +90,12 @@ func NewProvider(
 
 	nodeDiscoverer := opts.nodeDiscoverer
 	if nodeDiscoverer == nil {
-		nodeDiscoverer = coordination.NewNodeDiscoverer(kubeClient, config.Kubernetes.Namespace)
+		nodeDiscoverer = coordination2.NewNodeDiscoverer(kubeClient, config.Kubernetes.Namespace)
 	}
 
 	coordinator := opts.coordinator
 	if coordinator == nil {
-		coordinator = coordination.NewCoordinationManager(stateMachine)
+		coordinator = coordination2.NewCoordinationManager(stateMachine)
 	}
 
 	recoveryManager := opts.recoveryManager

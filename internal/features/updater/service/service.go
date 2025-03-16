@@ -135,96 +135,47 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 		// Update the node event service with discovered nodes
 		s.nodeEventService.UpdateNodes(s.nodes)
 
-		// Start the node event service
-		if err := s.nodeEventService.Start(ctx); err != nil {
-			if errors.Is(err, context.Canceled) {
-				startErr = ctx.Err()
-				return
-			}
-			log.Printf("Warning: Failed to start node event service: %v", err)
-		}
+		// Create a new independent background context that won't be affected by the parent
+		// This ensures our background processes continue running
+		serviceCtx, cancel := context.WithCancel(context.Background())
+		s.cancelFunc = cancel
 
-		// Check context again before node initialization
-		if ctx.Err() != nil {
-			startErr = ctx.Err()
-			return
-		}
-
-		// Initialize all nodes to the initial state
+		// Initialize all nodes before starting background services
 		for _, nodeName := range s.nodes {
-			// Check for context cancellation during iteration
-			if ctx.Err() != nil {
-				startErr = ctx.Err()
-				return
-			}
-
-			if err := s.initializeNode(ctx, nodeName); err != nil {
+			if err := s.initializeNode(serviceCtx, nodeName); err != nil {
 				log.Printf("Failed to initialize node %s: %v", nodeName, err)
 				// Continue with other nodes
 			}
 		}
 
-		// Check context again before accessing updater resource
-		if ctx.Err() != nil {
-			startErr = ctx.Err()
-			return
+		// Start the node event service with the service context
+		if err := s.nodeEventService.Start(serviceCtx); err != nil {
+			log.Printf("Warning: Failed to start node event service: %v", err)
 		}
-
-		// Try to get the updater resource
-		_, err := s.resourceFactory.GetResource(ctx, "updater", "k2pupdater-master")
-		if err != nil {
-			log.Printf("WARNING: Cannot find updater resource k2pupdater-master: %v", err)
-			log.Printf("Events may not be properly created if the target resource doesn't exist")
-		} else {
-			log.Printf("Successfully found updater resource k2pupdater-master")
-		}
-
-		// Use a derived context instead of background context
-		serviceCtx, cancel := context.WithCancel(context.Background())
-		s.cancelFunc = cancel // Store cancel function for cleanup
 
 		// Start background monitoring with explicit logging
 		log.Println("Starting background monitoring loops...")
 
-		go func() {
-			log.Println("Monitoring loop started")
-			s.monitoringLoop(serviceCtx)
-		}()
-
-		go func() {
-			log.Println("Cooldown loop started")
-			s.cooldownLoop(serviceCtx)
-		}()
-
-		go func() {
-			log.Println("Recovery loop started")
-			s.recoveryLoop(serviceCtx)
-		}()
-
-		// Add a goroutine to handle parent context cancellation
-		go func() {
-			select {
-			case <-ctx.Done():
-				log.Println("Parent context canceled, stopping service...")
-				s.Stop()
-			case <-s.stopChan:
-				log.Println("Service explicitly stopped")
-				return
-			}
-		}()
+		// Launch monitoring loops with the service context
+		go s.monitoringLoop(serviceCtx)
+		go s.cooldownLoop(serviceCtx)
+		go s.recoveryLoop(serviceCtx)
 
 		log.Println("All background monitoring loops initialized")
 	})
 
 	return startErr
 }
+
 func (s *UpdaterService) Stop() {
 	log.Println("Stopping updater service...")
 
+	// Cancel the service context if it exists
 	if s.cancelFunc != nil {
 		s.cancelFunc()
 	}
 
+	// Close the stop channel to signal any goroutines using it
 	close(s.stopChan)
 
 	// Wait a brief moment for goroutines to terminate
@@ -470,11 +421,10 @@ func (s *UpdaterService) monitoringLoop(ctx context.Context) {
 	log.Println("Starting monitoring loop execution")
 
 	monitoringTicker := time.NewTicker(s.config.MonitoringInterval)
-	statusUpdateTicker := time.NewTicker(1 * time.Minute) // Update status every minute
+	statusUpdateTicker := time.NewTicker(1 * time.Minute)
 	defer monitoringTicker.Stop()
 	defer statusUpdateTicker.Stop()
 
-	// Log initial heartbeat
 	log.Println("Monitoring loop initialized and waiting for first tick")
 
 	for {
@@ -482,23 +432,19 @@ func (s *UpdaterService) monitoringLoop(ctx context.Context) {
 		case <-ctx.Done():
 			log.Println("Monitoring loop context canceled")
 			return
-		case <-s.stopChan:
-			log.Println("Monitoring loop received stop signal")
-			return
 		case <-monitoringTicker.C:
-			// Check context before performing operations
+			// Skip operations if context is done
 			if ctx.Err() != nil {
-				log.Println("Skipping monitoring update due to canceled context")
-				return
+				continue
 			}
 
 			log.Println("Monitoring ticker triggered, updating node metrics")
 			s.updateAllNodeMetrics(ctx)
+
 		case <-statusUpdateTicker.C:
-			// Check context before performing operations
+			// Skip operations if context is done
 			if ctx.Err() != nil {
-				log.Println("Skipping status update due to canceled context")
-				return
+				continue
 			}
 
 			log.Println("Status update ticker triggered, updating node status")

@@ -56,22 +56,19 @@ func (s *NodeEventService) Start(ctx context.Context) error {
 	s.startOnce.Do(func() {
 		log.Println("Starting node event service...")
 
-		// Create a separate context that can be explicitly canceled
-		s.serviceCtx, s.cancelFunc = context.WithCancel(context.Background())
+		// Derive a new context from the parent context
+		serviceCtx, cancel := context.WithCancel(ctx)
+		s.serviceCtx = serviceCtx
+		s.cancelFunc = cancel
 
-		// Start background goroutine with the cancellable context
-		go s.eventCreationLoop(s.serviceCtx)
+		// Start background goroutine with the derived context
+		go s.eventCreationLoop(serviceCtx)
 
-		// Add a goroutine to handle parent context cancellation
+		// Add a monitoring goroutine to handle parent context cancellation
 		go func() {
-			select {
-			case <-ctx.Done():
-				log.Println("Parent context canceled, stopping node event service...")
-				s.Stop()
-			case <-s.stopChan:
-				log.Println("Node event service explicitly stopped")
-				return
-			}
+			<-ctx.Done()
+			log.Println("Parent context canceled, stopping node event service...")
+			s.Stop()
 		}()
 
 		log.Println("Node event service background loop started")
@@ -84,10 +81,12 @@ func (s *NodeEventService) Start(ctx context.Context) error {
 func (s *NodeEventService) Stop() {
 	log.Println("Stopping node event service...")
 
+	// Cancel the internal context if it exists
 	if s.cancelFunc != nil {
 		s.cancelFunc()
 	}
 
+	// Close the stop channel to ensure all goroutines know to terminate
 	close(s.stopChan)
 
 	log.Println("Node event service stopped")
@@ -106,9 +105,8 @@ func (s *NodeEventService) eventCreationLoop(ctx context.Context) {
 	defer eventTicker.Stop()
 
 	// Create initial events after a brief delay
-	time.Sleep(30 * time.Second)
-	log.Println("Creating initial events for all nodes")
-	s.createEventsForAllNodes(ctx)
+	initialEventTimer := time.NewTimer(30 * time.Second)
+	defer initialEventTimer.Stop()
 
 	for {
 		select {
@@ -122,6 +120,9 @@ func (s *NodeEventService) eventCreationLoop(ctx context.Context) {
 			log.Println("NODE EVENT SERVICE HEARTBEAT: Service is running")
 		case <-eventTicker.C:
 			log.Println("Ticker triggered, creating periodic events for all nodes")
+			s.createEventsForAllNodes(ctx)
+		case <-initialEventTimer.C:
+			log.Println("Creating initial events for all nodes")
 			s.createEventsForAllNodes(ctx)
 		}
 	}

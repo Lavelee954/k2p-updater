@@ -11,7 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"k2p-updater/cmd/app"
 	"k2p-updater/internal/api/v1/handler"
 	"k2p-updater/internal/api/v1/middleware"
@@ -22,6 +21,8 @@ import (
 	"k2p-updater/internal/features/updater"
 	updaterDomain "k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
+
+	"github.com/gin-gonic/gin"
 )
 
 // Server encapsulates the application server functionality
@@ -198,14 +199,16 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start updater service: %w", err)
 	}
 
-	// Wait for either server error or context cancellation
+	// Now we only return if there's a server error
+	// We don't return on context.Done() as that would cause premature shutdown
 	select {
 	case err := <-serverErrCh:
 		return err
-	case <-ctx.Done():
-		log.Println("Shutdown initiated, gracefully stopping services...")
-		return nil
+	default:
+		// Don't block, continue execution
 	}
+
+	return nil
 }
 
 // Shutdown performs graceful shutdown of the server and all services
@@ -241,13 +244,6 @@ func Run() int {
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
-	// Listen for shutdown signals in background
-	go func() {
-		sig := <-signals
-		log.Printf("Received signal: %v, initiating shutdown", sig)
-		cancel()
-	}()
-
 	// Initialize the server
 	server, err := NewServer(ctx)
 	if err != nil {
@@ -266,6 +262,15 @@ func Run() int {
 		log.Printf("Server error: %v", err)
 		return 1
 	}
+
+	log.Println("Updater service initialized successfully")
+
+	// Wait for shutdown signal
+	sig := <-signals
+	log.Printf("Received signal: %v, initiating shutdown", sig)
+	cancel() // Cancel the context to signal all background processes to stop
+
+	log.Println("Beginning graceful shutdown...")
 
 	// Shutdown gracefully
 	if err := server.Shutdown(); err != nil {

@@ -15,11 +15,11 @@ import (
 	"k2p-updater/internal/api/v1/handler"
 	"k2p-updater/internal/api/v1/middleware"
 	"k2p-updater/internal/features/exporter"
-	"k2p-updater/internal/features/exporter/domain"
+	exporterDomain "k2p-updater/internal/features/exporter/domain"
 	"k2p-updater/internal/features/metric"
-	domainMetric "k2p-updater/internal/features/metric/domain"
+	metricDomain "k2p-updater/internal/features/metric/domain"
 	"k2p-updater/internal/features/updater"
-	updaterDomain "k2p-updater/internal/features/updater/domain"
+	"k2p-updater/internal/features/updater/domain/interfaces"
 	"k2p-updater/pkg/resource"
 
 	"github.com/gin-gonic/gin"
@@ -29,10 +29,10 @@ import (
 type Server struct {
 	cfg             *app.Config
 	kubeClients     *app.KubeClients
-	exporterSvc     domain.Provider
-	metricsSvc      domainMetric.Provider
+	exporterSvc     exporterDomain.Provider
+	metricsSvc      metricDomain.Provider
 	resourceFactory *resource.Factory
-	updaterSvc      updaterDomain.Provider
+	updaterSvc      interfaces.Provider
 	httpServer      *http.Server
 	router          *gin.Engine
 }
@@ -160,9 +160,6 @@ func (s *Server) setupRoutes() error {
 	statusHandler := handler.NewStatusHandler(s.updaterSvc)
 	statusHandler.SetupRoutes(s.router)
 
-	// Add prometheus metrics endpoint
-	// s.router.GET("/metrics", gin.WrapH(promhttp.Handler()))
-
 	// Add swagger documentation if in development mode
 	if s.cfg.App.LogLevel == "debug" {
 		// s.router.GET("/swagger/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
@@ -227,8 +224,11 @@ func (s *Server) Shutdown() error {
 		}
 	}
 
-	// Any additional cleanup for services can be added here
-	// For example, stopping background goroutines, closing connections, etc.
+	// Stop the updater service if it's running
+	if s.updaterSvc != nil {
+		log.Println("Stopping updater service...")
+		s.updaterSvc.Stop()
+	}
 
 	log.Println("Application shutdown complete")
 	return nil

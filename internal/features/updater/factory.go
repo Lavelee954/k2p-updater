@@ -9,8 +9,16 @@ import (
 	"k2p-updater/cmd/app"
 	exporterDomain "k2p-updater/internal/features/exporter/domain"
 	metricDomain "k2p-updater/internal/features/metric/domain"
-	"k2p-updater/internal/features/updater/domain"
+	"k2p-updater/internal/features/updater/backend"
+	"k2p-updater/internal/features/updater/coordination"
+	"k2p-updater/internal/features/updater/domain/interfaces"
+	"k2p-updater/internal/features/updater/domain/models"
+	"k2p-updater/internal/features/updater/health"
+	"k2p-updater/internal/features/updater/metrics"
+	"k2p-updater/internal/features/updater/recovery"
+	resourceUpdater "k2p-updater/internal/features/updater/resource"
 	"k2p-updater/internal/features/updater/service"
+	"k2p-updater/internal/features/updater/state"
 	"k2p-updater/pkg/resource"
 
 	"k8s.io/client-go/kubernetes"
@@ -26,7 +34,7 @@ func NewProvider(
 	kubeClient kubernetes.Interface,
 	// Optional dependencies for testing
 	options ...ProviderOption,
-) (domain.Provider, error) {
+) (interfaces.Provider, error) {
 	// Initialize provider options with defaults
 	opts := &providerOptions{}
 	for _, option := range options {
@@ -34,7 +42,7 @@ func NewProvider(
 	}
 
 	// Create domain config from app config
-	domainConfig := domain.UpdaterConfig{
+	domainConfig := models.UpdaterConfig{
 		ScaleThreshold:         config.Updater.ScaleThreshold,
 		ScaleUpStep:            config.Updater.ScaleUpStep,
 		CooldownPeriod:         config.Updater.CooldownPeriod,
@@ -44,23 +52,23 @@ func NewProvider(
 	}
 
 	// Create resource factory adapter for the domain interface
-	resourceFactoryAdapter := NewResourceFactoryAdapter(resourceFactory)
+	resourceFactoryAdapter := resourceUpdater.NewResourceFactoryAdapter(resourceFactory)
 
 	// Create dependencies if not provided (for backwards compatibility)
 	backendClient := opts.backendClient
 	if backendClient == nil {
 		httpClient := &http.Client{Timeout: config.Backend.Timeout}
-		backendClient = service.NewBackendClient(&config.Backend, httpClient)
+		backendClient = backend.NewBackendClient(&config.Backend, httpClient)
 	}
 
 	healthVerifier := opts.healthVerifier
 	if healthVerifier == nil {
-		healthVerifier = service.NewHealthVerifier(exporterService)
+		healthVerifier = health.NewHealthVerifier(exporterService)
 	}
 
 	stateMachine := opts.stateMachine
 	if stateMachine == nil {
-		stateMachine = service.NewStateMachine(resourceFactory, nil) // Use default handlers
+		stateMachine = state.NewStateMachineWithDefaultHandlers(resourceFactory)
 	}
 
 	metricsComponent := opts.metricsComponent
@@ -72,27 +80,27 @@ func NewProvider(
 			ScaleTrigger:   config.Updater.ScaleThreshold,
 		}
 
-		// Use the new factory method
-		metricsComponent = service.NewMetricsComponent(
+		// Use the metrics factory to create the component
+		metricsComponent = metrics.NewMetricsComponent(
 			metricsService,
-			stateMachine,
+			stateMachine, // as StateUpdater
 			metricsConfig,
 		)
 	}
 
 	nodeDiscoverer := opts.nodeDiscoverer
 	if nodeDiscoverer == nil {
-		nodeDiscoverer = service.NewNodeDiscoverer(kubeClient, config.Kubernetes.Namespace)
+		nodeDiscoverer = coordination.NewNodeDiscoverer(kubeClient, config.Kubernetes.Namespace)
 	}
 
 	coordinator := opts.coordinator
 	if coordinator == nil {
-		coordinator = service.NewCoordinationManager(stateMachine)
+		coordinator = coordination.NewCoordinationManager(stateMachine)
 	}
 
 	recoveryManager := opts.recoveryManager
 	if recoveryManager == nil {
-		recoveryManager = service.NewRecoveryManager(stateMachine)
+		recoveryManager = recovery.NewRecoveryManager(stateMachine)
 	}
 
 	// Create updater service with all dependencies injected
@@ -118,62 +126,62 @@ func NewProvider(
 
 // providerOptions holds optional dependencies for the provider
 type providerOptions struct {
-	backendClient    domain.BackendClient
-	healthVerifier   domain.HealthVerifier
-	stateMachine     domain.StateMachine
-	metricsComponent service.MetricsComponent
-	nodeDiscoverer   domain.NodeDiscoverer
-	coordinator      domain.Coordinator
-	recoveryManager  domain.RecoveryManager
+	backendClient    interfaces.BackendClient
+	healthVerifier   interfaces.HealthVerifier
+	stateMachine     interfaces.StateMachine
+	metricsComponent interfaces.MetricsProvider
+	nodeDiscoverer   interfaces.NodeDiscoverer
+	coordinator      interfaces.Coordinator
+	recoveryManager  interfaces.RecoveryManager
 }
 
 // ProviderOption defines a functional option for configuring the provider
 type ProviderOption func(*providerOptions)
 
 // WithBackendClient sets a custom backend client
-func WithBackendClient(client domain.BackendClient) ProviderOption {
+func WithBackendClient(client interfaces.BackendClient) ProviderOption {
 	return func(o *providerOptions) {
 		o.backendClient = client
 	}
 }
 
 // WithHealthVerifier sets a custom health verifier
-func WithHealthVerifier(verifier domain.HealthVerifier) ProviderOption {
+func WithHealthVerifier(verifier interfaces.HealthVerifier) ProviderOption {
 	return func(o *providerOptions) {
 		o.healthVerifier = verifier
 	}
 }
 
 // WithStateMachine sets a custom state machine
-func WithStateMachine(sm domain.StateMachine) ProviderOption {
+func WithStateMachine(sm interfaces.StateMachine) ProviderOption {
 	return func(o *providerOptions) {
 		o.stateMachine = sm
 	}
 }
 
 // WithMetricsComponent sets a custom metrics component
-func WithMetricsComponent(comp service.MetricsComponent) ProviderOption {
+func WithMetricsComponent(comp interfaces.MetricsProvider) ProviderOption {
 	return func(o *providerOptions) {
 		o.metricsComponent = comp
 	}
 }
 
 // WithNodeDiscoverer sets a custom node discoverer
-func WithNodeDiscoverer(discoverer domain.NodeDiscoverer) ProviderOption {
+func WithNodeDiscoverer(discoverer interfaces.NodeDiscoverer) ProviderOption {
 	return func(o *providerOptions) {
 		o.nodeDiscoverer = discoverer
 	}
 }
 
 // WithCoordinator sets a custom coordinator
-func WithCoordinator(coordinator domain.Coordinator) ProviderOption {
+func WithCoordinator(coordinator interfaces.Coordinator) ProviderOption {
 	return func(o *providerOptions) {
 		o.coordinator = coordinator
 	}
 }
 
 // WithRecoveryManager sets a custom recovery manager
-func WithRecoveryManager(recoveryManager domain.RecoveryManager) ProviderOption {
+func WithRecoveryManager(recoveryManager interfaces.RecoveryManager) ProviderOption {
 	return func(o *providerOptions) {
 		o.recoveryManager = recoveryManager
 	}

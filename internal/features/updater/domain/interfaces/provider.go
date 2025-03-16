@@ -1,4 +1,4 @@
-package domain
+package interfaces
 
 import (
 	"context"
@@ -27,19 +27,4 @@ type Provider interface {
 
 	// Stop method for clean shutdown
 	Stop()
-}
-
-// BackendClient defines the interface for communicating with the backend API
-type BackendClient interface {
-	// RequestVMSpecUp sends a spec up request to the backend
-	RequestVMSpecUp(ctx context.Context, nodeName string, currentCPU float64) (bool, error)
-
-	// GetVMSpecUpStatus checks the status of a spec up request
-	GetVMSpecUpStatus(ctx context.Context, nodeName string) (bool, error)
-}
-
-// HealthVerifier defines the interface for verifying node health
-type HealthVerifier interface {
-	// VerifyNodeHealth checks if a node is healthy after spec up
-	VerifyNodeHealth(ctx context.Context, nodeName string) (bool, error)
 }

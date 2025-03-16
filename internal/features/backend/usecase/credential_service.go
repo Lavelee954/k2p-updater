@@ -73,6 +73,11 @@ func (s *CredentialService) RefreshToken() (domain.TokenInfo, error) {
 		return domain.TokenInfo{}, fmt.Errorf("failed to get credential secret data: %w", err)
 	}
 
+	// Check if secretData is nil as a defensive measure
+	if secretData == nil {
+		return domain.TokenInfo{}, fmt.Errorf("no data returned from secret")
+	}
+
 	// Validate required keys
 	for _, key := range s.config.RequiredKeys {
 		if _, exists := secretData[key]; !exists {

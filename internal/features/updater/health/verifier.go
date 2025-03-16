@@ -9,20 +9,20 @@ import (
 	"time"
 )
 
-// HealthVerifier implements the interfaces.HealthVerifier interface
-type HealthVerifier struct {
+// Verifier HealthVerifier implements the interfaces.HealthVerifier interface
+type Verifier struct {
 	exporterService domainExporter.Provider
 }
 
 // NewHealthVerifier creates a new health verifier
 func NewHealthVerifier(exporterService domainExporter.Provider) interfaces.HealthVerifier {
-	return &HealthVerifier{
+	return &Verifier{
 		exporterService: exporterService,
 	}
 }
 
 // VerifyNodeHealth checks if a node is healthy after spec up
-func (v *HealthVerifier) VerifyNodeHealth(ctx context.Context, nodeName string) (bool, error) {
+func (v *Verifier) VerifyNodeHealth(ctx context.Context, nodeName string) (bool, error) {
 	// Get the exporter for this node
 	exporter, exists := v.exporterService.GetExporter(nodeName)
 	if !exists {

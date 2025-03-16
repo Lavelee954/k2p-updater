@@ -7,12 +7,12 @@ import (
 	"log"
 )
 
-// MetricsCollector is responsible for collecting metrics data
-type MetricsCollector interface {
+// Collector is responsible for collecting metrics data
+type Collector interface {
 	GetNodeCPUMetrics(nodeName string) (float64, float64, error)
 }
 
-// DefaultMetricsCollector implements the MetricsCollector interface
+// DefaultMetricsCollector implements the Collector interface
 type DefaultMetricsCollector struct {
 	metricsService domainMetric.Provider
 }

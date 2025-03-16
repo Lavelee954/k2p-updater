@@ -1,4 +1,3 @@
-// internal/features/exporter/domain/kubernetes.go
 package domain
 
 import (

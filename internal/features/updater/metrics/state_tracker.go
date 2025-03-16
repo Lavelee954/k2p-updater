@@ -22,14 +22,14 @@ type NodeMetricsStatus struct {
 	Message       string
 }
 
-// MetricsStateTracker is responsible for tracking metrics collection state
-type MetricsStateTracker interface {
+// StateTracker is responsible for tracking metrics collection state
+type StateTracker interface {
 	GetMetricsState(nodeName string) models.MetricsState
 	UpdateMetricsState(nodeName string, state models.MetricsState, message string)
 	StartMonitoring(ctx context.Context) error
 }
 
-// DefaultMetricsStateTracker implements the MetricsStateTracker interface
+// DefaultMetricsStateTracker implements the StateTracker interface
 type DefaultMetricsStateTracker struct {
 	metricsService domainMetric.Provider
 	stateUpdater   interfaces.StateUpdater

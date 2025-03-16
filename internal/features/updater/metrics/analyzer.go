@@ -6,13 +6,13 @@ import (
 	domainMetric "k2p-updater/internal/features/metric/domain"
 )
 
-// MetricsAnalyzer is responsible for analyzing metrics data
-type MetricsAnalyzer interface {
+// Analyzer is responsible for analyzing metrics data
+type Analyzer interface {
 	IsWindowReadyForScaling(ctx context.Context, nodeName string) (bool, error)
 	CheckCPUThresholdExceeded(ctx context.Context, nodeName string, currentCPU, windowAvg float64) (bool, error)
 }
 
-// DefaultMetricsAnalyzer implements the MetricsAnalyzer interface
+// DefaultMetricsAnalyzer implements the Analyzer interface
 type DefaultMetricsAnalyzer struct {
 	metricsService domainMetric.Provider
 	config         *app.MetricsConfig

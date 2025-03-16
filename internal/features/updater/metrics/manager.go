@@ -12,18 +12,18 @@ import (
 
 // MetricsManager orchestrates the metrics components
 type MetricsManager struct {
-	collector      MetricsCollector
-	analyzer       MetricsAnalyzer
-	stateTracker   MetricsStateTracker
+	collector      Collector
+	analyzer       Analyzer
+	stateTracker   StateTracker
 	stateUpdater   interfaces.StateUpdater
 	metricsService domainMetric.Provider
 }
 
 // NewMetricsManager creates a new metrics manager
 func NewMetricsManager(
-	collector MetricsCollector,
-	analyzer MetricsAnalyzer,
-	stateTracker MetricsStateTracker,
+	collector Collector,
+	analyzer Analyzer,
+	stateTracker StateTracker,
 	stateUpdater interfaces.StateUpdater,
 	metricsService domainMetric.Provider,
 ) *MetricsManager {

@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// RecoveryManager handles recovery from failed states
-type RecoveryManager struct {
+// Manager RecoveryManager handles recovery from failed states
+type Manager struct {
 	stateMachine           interfaces.StateMachine
 	recoveryWaitPeriod     time.Duration
 	recoveryCooldownPeriod time.Duration
@@ -23,7 +23,7 @@ type RecoveryManager struct {
 
 // NewRecoveryManager creates a new recovery manager
 func NewRecoveryManager(stateMachine interfaces.StateMachine) interfaces.RecoveryManager {
-	return &RecoveryManager{
+	return &Manager{
 		stateMachine:           stateMachine,
 		recoveryWaitPeriod:     5 * time.Minute,
 		recoveryCooldownPeriod: 10 * time.Minute,
@@ -33,7 +33,7 @@ func NewRecoveryManager(stateMachine interfaces.StateMachine) interfaces.Recover
 }
 
 // AttemptRecovery tries to recover a node from a failed state
-func (r *RecoveryManager) AttemptRecovery(ctx context.Context, nodeName string) error {
+func (r *Manager) AttemptRecovery(ctx context.Context, nodeName string) error {
 	// Check for context cancellation
 	if ctx.Err() != nil {
 		return ctx.Err()
@@ -102,7 +102,7 @@ func (r *RecoveryManager) AttemptRecovery(ctx context.Context, nodeName string) 
 }
 
 // ResetRecoveryCounter resets the recovery counter for a node
-func (r *RecoveryManager) ResetRecoveryCounter(nodeName string) {
+func (r *Manager) ResetRecoveryCounter(nodeName string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -110,7 +110,7 @@ func (r *RecoveryManager) ResetRecoveryCounter(nodeName string) {
 }
 
 // CheckAllNodes attempts recovery for all nodes in failed state
-func (r *RecoveryManager) CheckAllNodes(ctx context.Context, nodes []string) {
+func (r *Manager) CheckAllNodes(ctx context.Context, nodes []string) {
 	// Check for context cancellation at the beginning
 	if ctx.Err() != nil {
 		log.Printf("Skipping recovery check due to context cancellation: %v", ctx.Err())

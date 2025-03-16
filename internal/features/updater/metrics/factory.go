@@ -52,7 +52,7 @@ func WithCustomCollector(
 	metricsService domainMetric.Provider,
 	stateUpdater interfaces.StateUpdater,
 	config *app.MetricsConfig,
-	customCollector MetricsCollector,
+	customCollector Collector,
 ) Component {
 	analyzer := NewMetricsAnalyzer(metricsService, config)
 	stateTracker := NewMetricsStateTracker(metricsService, stateUpdater)
@@ -71,7 +71,7 @@ func WithCustomAnalyzer(
 	metricsService domainMetric.Provider,
 	stateUpdater interfaces.StateUpdater,
 	config *app.MetricsConfig,
-	customAnalyzer MetricsAnalyzer,
+	customAnalyzer Analyzer,
 ) Component {
 	collector := NewMetricsCollector(metricsService)
 	stateTracker := NewMetricsStateTracker(metricsService, stateUpdater)
@@ -90,7 +90,7 @@ func WithCustomStateTracker(
 	metricsService domainMetric.Provider,
 	stateUpdater interfaces.StateUpdater,
 	config *app.MetricsConfig,
-	customStateTracker MetricsStateTracker,
+	customStateTracker StateTracker,
 ) Component {
 	collector := NewMetricsCollector(metricsService)
 	analyzer := NewMetricsAnalyzer(metricsService, config)

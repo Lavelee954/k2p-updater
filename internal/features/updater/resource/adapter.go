@@ -7,27 +7,27 @@ import (
 	"k2p-updater/pkg/resource"
 )
 
-// ResourceFactoryAdapter adapts the pkg/resource.Factory to the domain.ResourceFactory interface
-type ResourceFactoryAdapter struct {
+// FactoryAdapter ResourceFactoryAdapter adapts the pkg/resource.Factory to the domain.ResourceFactory interface
+type FactoryAdapter struct {
 	factory *resource.Factory
 }
 
 // NewResourceFactoryAdapter creates a new resource factory adapter
 func NewResourceFactoryAdapter(factory *resource.Factory) interfaces.ResourceFactory {
-	return &ResourceFactoryAdapter{
+	return &FactoryAdapter{
 		factory: factory,
 	}
 }
 
 // Event returns the event recorder interface
-func (r *ResourceFactoryAdapter) Event() interfaces.EventRecorder {
+func (r *FactoryAdapter) Event() interfaces.EventRecorder {
 	return &EventRecorderAdapter{
 		event: r.factory.Event(),
 	}
 }
 
 // Status returns the status updater interface
-func (r *ResourceFactoryAdapter) Status() interfaces.StatusUpdater {
+func (r *FactoryAdapter) Status() interfaces.StatusUpdater {
 	return &StatusUpdaterAdapter{
 		status: r.factory.Status(),
 	}

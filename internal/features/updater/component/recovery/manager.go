@@ -89,21 +89,6 @@ func (r *Manager) AttemptRecovery(ctx context.Context, nodeName string) error {
 	return nil
 }
 
-// getRecoveryAttempts gets the current recovery attempts count for a node
-func (r *Manager) getRecoveryAttempts(nodeName string) int {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.recoveryAttempts[nodeName]
-}
-
-// incrementRecoveryAttempts increments and returns the recovery attempts count
-func (r *Manager) incrementRecoveryAttempts(nodeName string) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.recoveryAttempts[nodeName]++
-	return r.recoveryAttempts[nodeName]
-}
-
 // ResetRecoveryCounter resets the recovery counter for a node
 func (r *Manager) ResetRecoveryCounter(nodeName string) {
 	r.mu.Lock()
@@ -132,4 +117,19 @@ func (r *Manager) CheckAllNodes(ctx context.Context, nodes []string) {
 			log.Printf("Failed to attempt recovery for node %s: %v", nodeName, err)
 		}
 	}
+}
+
+// getRecoveryAttempts gets the current recovery attempts count for a node
+func (r *Manager) getRecoveryAttempts(nodeName string) int {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.recoveryAttempts[nodeName]
+}
+
+// incrementRecoveryAttempts increments and returns the recovery attempts count
+func (r *Manager) incrementRecoveryAttempts(nodeName string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recoveryAttempts[nodeName]++
+	return r.recoveryAttempts[nodeName]
 }

@@ -111,55 +111,6 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 	return startErr
 }
 
-// recordStartupEvent adds a startup event
-func (s *UpdaterService) recordStartupEvent(ctx context.Context) error {
-	event := s.resourceFactory.Event().NormalRecordWithNode(
-		ctx,
-		models.UpdateKey,
-		models.ResourceName,
-		string(models.StatePendingVmSpecUp),
-		"K2P-Updater service starting with %d control plane nodes configured",
-		len(s.nodes),
-	)
-
-	if event != nil {
-		return event
-	}
-
-	log.Printf("Successfully recorded application startup event")
-	return nil
-}
-
-// recordNodesDiscoveredEvent records the nodes discovery event
-func (s *UpdaterService) recordNodesDiscoveredEvent(ctx context.Context) error {
-	event := s.resourceFactory.Event().NormalRecordWithNode(
-		ctx,
-		models.UpdateKey,
-		models.ResourceName,
-		string(models.StatePendingVmSpecUp),
-		"Discovered %d control plane nodes: %s",
-		len(s.nodes),
-		strings.Join(s.nodes, ", "),
-	)
-
-	if event != nil {
-		return event
-	}
-
-	log.Printf("Successfully recorded nodes discovered event")
-	return nil
-}
-
-// initializeAllNodes initializes all discovered nodes
-func (s *UpdaterService) initializeAllNodes(ctx context.Context) {
-	for _, nodeName := range s.nodes {
-		if err := s.initializeNode(ctx, nodeName); err != nil {
-			log.Printf("Failed to initialize node %s: %v", nodeName, err)
-			// Continue with other nodes
-		}
-	}
-}
-
 // Stop stops the updater service
 func (s *UpdaterService) Stop() {
 	log.Println("Stopping updater service...")
@@ -176,79 +127,6 @@ func (s *UpdaterService) Stop() {
 	time.Sleep(100 * time.Millisecond)
 
 	log.Println("Updater service stopped")
-}
-
-// GetStateMachine returns the state machine instance
-func (s *UpdaterService) GetStateMachine() interfaces.StateMachine {
-	return s.stateMachine
-}
-
-// RequestSpecUp requests a spec up for a node
-func (s *UpdaterService) RequestSpecUp(ctx context.Context, nodeName string) error {
-	// Check context cancellation
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	// Get current node status
-	status, err := s.stateMachine.GetStatus(ctx, nodeName)
-	if err != nil {
-		return fmt.Errorf("failed to get node status: %w", err)
-	}
-
-	// Validate state is appropriate for spec up
-	if status.CurrentState != models.StateInProgressVmSpecUp &&
-		status.CurrentState != models.StateMonitoring {
-		return fmt.Errorf("node %s is in %s state, cannot request spec up",
-			nodeName, status.CurrentState)
-	}
-
-	// Get current CPU utilization
-	currentCPU, _, err := s.GetNodeCPUUtilization(ctx, nodeName)
-	if err != nil {
-		return fmt.Errorf("failed to get CPU utilization: %w", err)
-	}
-
-	// Request VM spec up from backend
-	success, err := s.backendClient.RequestVMSpecUp(ctx, nodeName, currentCPU)
-	if err != nil {
-		// Handle failure
-		if err := s.handleSpecUpFailure(ctx, nodeName, err.Error()); err != nil {
-			log.Printf("Failed to handle spec up failure event: %v", err)
-		}
-		return fmt.Errorf("backend request failed: %w", err)
-	}
-
-	if !success {
-		// Handle unsuccessful response
-		if err := s.handleSpecUpFailure(ctx, nodeName, "Backend returned unsuccessful response"); err != nil {
-			log.Printf("Failed to handle spec up failure event: %v", err)
-		}
-		return fmt.Errorf("backend returned unsuccessful response")
-	}
-
-	// Handle success
-	return s.handleSpecUpSuccess(ctx, nodeName, currentCPU)
-}
-
-// handleSpecUpFailure handles spec up failure events
-func (s *UpdaterService) handleSpecUpFailure(ctx context.Context, nodeName, errorMsg string) error {
-	data := map[string]interface{}{
-		"error": errorMsg,
-	}
-	return s.stateMachine.HandleEvent(ctx, nodeName, models.EventSpecUpFailed, data)
-}
-
-// handleSpecUpSuccess handles successful spec up requests
-func (s *UpdaterService) handleSpecUpSuccess(ctx context.Context, nodeName string, currentCPU float64) error {
-	data := map[string]interface{}{
-		"cpuUtilization": currentCPU,
-	}
-	if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventSpecUpRequested, data); err != nil {
-		log.Printf("Failed to handle spec up requested event: %v", err)
-		return fmt.Errorf("failed to update state: %w", err)
-	}
-	return nil
 }
 
 // VerifySpecUpHealth verifies the health of a node after spec up
@@ -348,6 +226,128 @@ func (s *UpdaterService) IsCooldownActive(ctx context.Context, nodeName string) 
 	}
 
 	return inCooldown, remaining, nil
+}
+
+// GetStateMachine returns the state machine instance
+func (s *UpdaterService) GetStateMachine() interfaces.StateMachine {
+	return s.stateMachine
+}
+
+// RequestSpecUp requests a spec up for a node
+func (s *UpdaterService) RequestSpecUp(ctx context.Context, nodeName string) error {
+	// Check context cancellation
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// Get current node status
+	status, err := s.stateMachine.GetStatus(ctx, nodeName)
+	if err != nil {
+		return fmt.Errorf("failed to get node status: %w", err)
+	}
+
+	// Validate state is appropriate for spec up
+	if status.CurrentState != models.StateInProgressVmSpecUp &&
+		status.CurrentState != models.StateMonitoring {
+		return fmt.Errorf("node %s is in %s state, cannot request spec up",
+			nodeName, status.CurrentState)
+	}
+
+	// Get current CPU utilization
+	currentCPU, _, err := s.GetNodeCPUUtilization(ctx, nodeName)
+	if err != nil {
+		return fmt.Errorf("failed to get CPU utilization: %w", err)
+	}
+
+	// Request VM spec up from backend
+	success, err := s.backendClient.RequestVMSpecUp(ctx, nodeName, currentCPU)
+	if err != nil {
+		// Handle failure
+		if err := s.handleSpecUpFailure(ctx, nodeName, err.Error()); err != nil {
+			log.Printf("Failed to handle spec up failure event: %v", err)
+		}
+		return fmt.Errorf("backend request failed: %w", err)
+	}
+
+	if !success {
+		// Handle unsuccessful response
+		if err := s.handleSpecUpFailure(ctx, nodeName, "Backend returned unsuccessful response"); err != nil {
+			log.Printf("Failed to handle spec up failure event: %v", err)
+		}
+		return fmt.Errorf("backend returned unsuccessful response")
+	}
+
+	// Handle success
+	return s.handleSpecUpSuccess(ctx, nodeName, currentCPU)
+}
+
+// recordStartupEvent adds a startup event
+func (s *UpdaterService) recordStartupEvent(ctx context.Context) error {
+	event := s.resourceFactory.Event().NormalRecordWithNode(
+		ctx,
+		models.UpdateKey,
+		models.ResourceName,
+		string(models.StatePendingVmSpecUp),
+		"K2P-Updater service starting with %d control plane nodes configured",
+		len(s.nodes),
+	)
+
+	if event != nil {
+		return event
+	}
+
+	log.Printf("Successfully recorded application startup event")
+	return nil
+}
+
+// recordNodesDiscoveredEvent records the nodes discovery event
+func (s *UpdaterService) recordNodesDiscoveredEvent(ctx context.Context) error {
+	event := s.resourceFactory.Event().NormalRecordWithNode(
+		ctx,
+		models.UpdateKey,
+		models.ResourceName,
+		string(models.StatePendingVmSpecUp),
+		"Discovered %d control plane nodes: %s",
+		len(s.nodes),
+		strings.Join(s.nodes, ", "),
+	)
+
+	if event != nil {
+		return event
+	}
+
+	log.Printf("Successfully recorded nodes discovered event")
+	return nil
+}
+
+// initializeAllNodes initializes all discovered nodes
+func (s *UpdaterService) initializeAllNodes(ctx context.Context) {
+	for _, nodeName := range s.nodes {
+		if err := s.initializeNode(ctx, nodeName); err != nil {
+			log.Printf("Failed to initialize node %s: %v", nodeName, err)
+			// Continue with other nodes
+		}
+	}
+}
+
+// handleSpecUpFailure handles spec up failure events
+func (s *UpdaterService) handleSpecUpFailure(ctx context.Context, nodeName, errorMsg string) error {
+	data := map[string]interface{}{
+		"error": errorMsg,
+	}
+	return s.stateMachine.HandleEvent(ctx, nodeName, models.EventSpecUpFailed, data)
+}
+
+// handleSpecUpSuccess handles successful spec up requests
+func (s *UpdaterService) handleSpecUpSuccess(ctx context.Context, nodeName string, currentCPU float64) error {
+	data := map[string]interface{}{
+		"cpuUtilization": currentCPU,
+	}
+	if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventSpecUpRequested, data); err != nil {
+		log.Printf("Failed to handle spec up requested event: %v", err)
+		return fmt.Errorf("failed to update state: %w", err)
+	}
+	return nil
 }
 
 // discoverNodes discovers control plane nodes to monitor

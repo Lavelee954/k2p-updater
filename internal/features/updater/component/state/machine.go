@@ -42,16 +42,6 @@ func NewStateMachine(
 	return sm
 }
 
-// initUpdateQueue initializes the update queue
-func (sm *stateMachine) initUpdateQueue() {
-	sm.updateQueue = queue.NewUpdateQueue(
-		&nodeProcessorAdapter{sm: sm},
-		queue.WithMaxQueueSize(200),
-		queue.WithMaxRetries(3),
-		queue.WithProcessingDelay(50*time.Millisecond),
-	)
-}
-
 // HandleEvent processes an event and performs the appropriate state transition
 func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event models.Event, data map[string]interface{}) error {
 	if err := ctx.Err(); err != nil {
@@ -94,23 +84,6 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 	// No state change, just update the status
 	sm.statusMap[nodeName] = newStatus
 	return sm.updateCRStatus(ctx, nodeName, newStatus)
-}
-
-// initializeNodeStatus creates a new node status with default values
-func (sm *stateMachine) initializeNodeStatus(nodeName string, data map[string]interface{}) *models.ControlPlaneStatus {
-	initialState := models.StatePendingVmSpecUp
-	if data != nil {
-		if state, ok := data["initialState"].(models.State); ok && state != "" {
-			initialState = state
-		}
-	}
-
-	return &models.ControlPlaneStatus{
-		NodeName:           nodeName,
-		CurrentState:       initialState,
-		LastTransitionTime: time.Now(),
-		Message:            fmt.Sprintf("Initializing in %s state", initialState),
-	}
 }
 
 // handleStateTransition manages state transitions including exit and enter handlers
@@ -266,4 +239,31 @@ func (a *nodeProcessorAdapter) ProcessNodeOperation(
 	data map[string]interface{},
 ) error {
 	return a.sm.HandleEvent(ctx, nodeName, event, data)
+}
+
+// initializeNodeStatus creates a new node status with default values
+func (sm *stateMachine) initializeNodeStatus(nodeName string, data map[string]interface{}) *models.ControlPlaneStatus {
+	initialState := models.StatePendingVmSpecUp
+	if data != nil {
+		if state, ok := data["initialState"].(models.State); ok && state != "" {
+			initialState = state
+		}
+	}
+
+	return &models.ControlPlaneStatus{
+		NodeName:           nodeName,
+		CurrentState:       initialState,
+		LastTransitionTime: time.Now(),
+		Message:            fmt.Sprintf("Initializing in %s state", initialState),
+	}
+}
+
+// initUpdateQueue initializes the update queue
+func (sm *stateMachine) initUpdateQueue() {
+	sm.updateQueue = queue.NewUpdateQueue(
+		&nodeProcessorAdapter{sm: sm},
+		queue.WithMaxQueueSize(200),
+		queue.WithMaxRetries(3),
+		queue.WithProcessingDelay(50*time.Millisecond),
+	)
 }

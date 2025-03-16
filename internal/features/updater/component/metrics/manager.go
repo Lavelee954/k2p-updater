@@ -10,8 +10,8 @@ import (
 	"k2p-updater/internal/features/updater/domain/models"
 )
 
-// MetricsManager orchestrates the metrics components
-type MetricsManager struct {
+// Manager MetricsManager orchestrates the metrics components
+type Manager struct {
 	collector      Collector
 	analyzer       Analyzer
 	stateTracker   StateTracker
@@ -26,8 +26,8 @@ func NewMetricsManager(
 	stateTracker StateTracker,
 	stateUpdater interfaces.StateUpdater,
 	metricsService domainMetric.Provider,
-) *MetricsManager {
-	return &MetricsManager{
+) *Manager {
+	return &Manager{
 		collector:      collector,
 		analyzer:       analyzer,
 		stateTracker:   stateTracker,
@@ -37,12 +37,12 @@ func NewMetricsManager(
 }
 
 // GetNodeCPUMetrics returns the current and window average CPU metrics for a node
-func (m *MetricsManager) GetNodeCPUMetrics(nodeName string) (float64, float64, error) {
+func (m *Manager) GetNodeCPUMetrics(nodeName string) (float64, float64, error) {
 	return m.collector.GetNodeCPUMetrics(nodeName)
 }
 
 // IsWindowReadyForScaling checks if the window is mature enough for scaling decisions
-func (m *MetricsManager) IsWindowReadyForScaling(ctx context.Context, nodeName string) (bool, error) {
+func (m *Manager) IsWindowReadyForScaling(ctx context.Context, nodeName string) (bool, error) {
 	if ctx.Err() != nil {
 		return false, ctx.Err()
 	}
@@ -56,7 +56,7 @@ func (m *MetricsManager) IsWindowReadyForScaling(ctx context.Context, nodeName s
 }
 
 // CheckCPUThresholdExceeded determines if a node's CPU utilization exceeds the threshold
-func (m *MetricsManager) CheckCPUThresholdExceeded(ctx context.Context, nodeName string) (bool, float64, float64, error) {
+func (m *Manager) CheckCPUThresholdExceeded(ctx context.Context, nodeName string) (bool, float64, float64, error) {
 	if ctx.Err() != nil {
 		return false, 0, 0, ctx.Err()
 	}
@@ -91,14 +91,14 @@ func (m *MetricsManager) CheckCPUThresholdExceeded(ctx context.Context, nodeName
 }
 
 // StartMonitoring begins background monitoring of metrics states
-func (m *MetricsManager) StartMonitoring(ctx context.Context) error {
+func (m *Manager) StartMonitoring(ctx context.Context) error {
 	return m.stateTracker.StartMonitoring(ctx)
 }
 
 // GetMetricsState returns the current metrics collection state for a node
-func (m *MetricsManager) GetMetricsState(nodeName string) models.MetricsState {
+func (m *Manager) GetMetricsState(nodeName string) models.MetricsState {
 	return m.stateTracker.GetMetricsState(nodeName)
 }
 
 // Verify interface implementation
-var _ interfaces.MetricsProvider = (*MetricsManager)(nil)
+var _ interfaces.MetricsProvider = (*Manager)(nil)

@@ -194,3 +194,24 @@ func MustCheck(err error) {
 		panic(err)
 	}
 }
+
+// InsufficientDataError Define a custom error type (if needed)
+type InsufficientDataError struct {
+	Message  string
+	Provided int
+	Required int
+}
+
+// Implement the error interface
+func (e *InsufficientDataError) Error() string {
+	return fmt.Sprintf("%s: provided %d, requires at least %d", e.Message, e.Provided, e.Required)
+}
+
+// NewInsufficientDataError creates a new InsufficientDataError.
+func NewInsufficientDataError(message string, provided, required int) error {
+	return &InsufficientDataError{
+		Message:  message,
+		Provided: provided,
+		Required: required,
+	}
+}

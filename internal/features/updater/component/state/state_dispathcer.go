@@ -37,6 +37,7 @@ func buildTransitionMatrix() map[models.State]map[models.Event]models.State {
 	matrix[models.StateMonitoring] = map[models.Event]models.State{
 		models.EventThresholdExceeded: models.StateInProgressVmSpecUp,
 		models.EventMonitoringStatus:  models.StateMonitoring, // Self-transition
+		models.EventInitialize:        models.StateMonitoring, // Self-transition
 	}
 
 	// Define transitions for InProgressVmSpecUp state
@@ -78,6 +79,19 @@ func (d *EventDispatcher) DispatchEvent(ctx context.Context, status *models.Cont
 	}
 
 	currentState := status.CurrentState
+
+	// First check if the event is valid in the transition matrix
+	stateTransitions, stateExists := d.transitionMatrix[currentState]
+	if !stateExists {
+		return nil, fmt.Errorf("no transitions defined for state %s", currentState)
+	}
+
+	_, eventExists := stateTransitions[event]
+	if !eventExists {
+		return nil, fmt.Errorf("event %s is not valid for state %s", event, currentState)
+	}
+
+	// Get the handler for the current state
 	handler, exists := d.stateHandlers[currentState]
 	if !exists {
 		return nil, fmt.Errorf("no handler found for state %s", currentState)
@@ -91,24 +105,12 @@ func (d *EventDispatcher) DispatchEvent(ctx context.Context, status *models.Cont
 
 	// Check if the resulting state is allowed by the transition matrix
 	if newStatus.CurrentState != currentState {
-		allowed, exists := d.isTransitionAllowed(currentState, event, newStatus.CurrentState)
-		if !exists || !allowed {
-			return nil, fmt.Errorf("invalid state transition from %s to %s triggered by event %s",
-				currentState, newStatus.CurrentState, event)
+		targetState := stateTransitions[event]
+		if newStatus.CurrentState != targetState {
+			return nil, fmt.Errorf("invalid state transition from %s to %s triggered by event %s (expected %s)",
+				currentState, newStatus.CurrentState, event, targetState)
 		}
 	}
 
 	return newStatus, nil
-}
-
-// isTransitionAllowed checks if a transition is allowed by the matrix
-func (d *EventDispatcher) isTransitionAllowed(fromState models.State, event models.Event,
-	toState models.State) (bool, bool) {
-	stateTransitions, exists := d.transitionMatrix[fromState]
-	if !exists {
-		return false, false
-	}
-
-	allowedState, exists := stateTransitions[event]
-	return allowedState == toState, exists
 }

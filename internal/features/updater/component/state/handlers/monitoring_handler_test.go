@@ -6,19 +6,87 @@ import (
 	"time"
 
 	"k2p-updater/internal/features/updater/domain/models"
-	"k2p-updater/pkg/resource"
 )
 
-// mockResourceFactory creates a resource factory that doesn't do anything
-func mockResourceFactory() *resource.Factory {
-	// In a real implementation, you would create a mock of resource.Factory
-	// For simplicity, we'll create a stub that doesn't do anything
-	return &resource.Factory{}
+// mockEventRecorder implements a test version of EventRecorder
+type mockEventRecorder struct {
+	events []string // Stores event information for verification
 }
 
+func (m *mockEventRecorder) NormalRecordWithNode(
+	ctx context.Context,
+	component,
+	nodeName,
+	reason,
+	messageFmt string,
+	args ...interface{},
+) error {
+	// Just record that an event happened, don't actually do anything
+	m.events = append(m.events, reason)
+	return nil
+}
+
+func (m *mockEventRecorder) WarningRecordWithNode(
+	ctx context.Context,
+	component,
+	nodeName,
+	reason,
+	messageFmt string,
+	args ...interface{},
+) error {
+	// Just record that an event happened, don't actually do anything
+	m.events = append(m.events, "WARNING-"+reason)
+	return nil
+}
+
+// mockStatusUpdater implements a test version of StatusUpdater
+type mockStatusUpdater struct{}
+
+func (m *mockStatusUpdater) UpdateGenericWithNode(
+	ctx context.Context,
+	component,
+	nodeName string,
+	statusData map[string]interface{},
+) error {
+	// Do nothing in the test
+	return nil
+}
+
+// mockResourceFactory creates a properly mocked resource factory
+type mockResourceFactory struct {
+	eventRecorder *mockEventRecorder
+	statusUpdater *mockStatusUpdater
+}
+
+func (m *mockResourceFactory) Event() interface{} {
+	return m.eventRecorder
+}
+
+func (m *mockResourceFactory) Status() interface{} {
+	return m.statusUpdater
+}
+
+// createMockResourceFactory creates a properly initialized mock factory
+func createMockResourceFactory() *mockResourceFactory {
+	return &mockResourceFactory{
+		eventRecorder: &mockEventRecorder{events: make([]string, 0)},
+		statusUpdater: &mockStatusUpdater{},
+	}
+}
+
+// mockBaseStateHandler creates a BaseStateHandler with test implementation
+func mockBaseStateHandler(events []models.Event) *BaseStateHandler {
+	return &BaseStateHandler{
+		resourceFactory: nil, // We'll override methods that use this
+		supportedEvents: events,
+	}
+}
+
+// monitoring_handler_test.go
+
 func TestMonitoringHandler_Handle(t *testing.T) {
-	// Create handler
-	handler := NewMonitoringHandler(mockResourceFactory())
+	// Create test handler
+	handler := NewTestMonitoringHandler()
 
 	// Create test status
 	status := &models.ControlPlaneStatus{
@@ -60,20 +128,19 @@ func TestMonitoringHandler_Handle(t *testing.T) {
 	}
 
 	// Test unsupported event
-	_, err = handler.Handle(context.Background(), status, models.EventSpecUpRequested, nil)
-	if err == nil {
-		t.Error("Expected error for unsupported event, got nil")
+	if handler.IsEventSupported(models.EventSpecUpRequested) {
+		t.Error("EventSpecUpRequested should not be supported but was reported as supported")
 	}
 }
 
 func TestMonitoringHandler_OnEnter(t *testing.T) {
-	// Create handler
-	handler := NewMonitoringHandler(mockResourceFactory())
+	// Create test handler
+	handler := NewTestMonitoringHandler()
 
 	// Create test status
 	status := &models.ControlPlaneStatus{
 		NodeName:                 "test-node",
-		CurrentState:             models.StatePendingVmSpecUp, // Previous state
+		CurrentState:             models.StateMonitoring,
 		LastTransitionTime:       time.Now(),
 		Message:                  "Test status",
 		CPUUtilization:           70.0,
@@ -86,7 +153,7 @@ func TestMonitoringHandler_OnEnter(t *testing.T) {
 		t.Errorf("OnEnter returned error: %v", err)
 	}
 
-	if result.Message == status.Message {
-		t.Error("Expected message to be updated")
+	if result.Message != "Entered monitoring state" {
+		t.Errorf("Expected message to be 'Entered monitoring state', got '%s'", result.Message)
 	}
 }

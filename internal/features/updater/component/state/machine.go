@@ -28,6 +28,9 @@ type stateMachine struct {
 	// resourceFactory is used to update the custom resource status
 	resourceFactory *resource.Factory
 
+	// updateQueue manages the queued operations
+	updateQueue *queue.UpdateQueue
+
 	// mu protects concurrent access to the status map
 	mu sync.RWMutex
 }
@@ -46,6 +49,9 @@ func NewStateMachine(
 
 	// Create event dispatcher with transition matrix
 	sm.eventDispatcher = NewEventDispatcher(stateHandlers)
+
+	// Initialize the update queue after the state machine is fully defined
+	sm.initUpdateQueue()
 
 	return sm
 }
@@ -454,35 +460,8 @@ func (a *nodeProcessorAdapter) ProcessNodeOperation(
 	event models.Event,
 	data map[string]interface{},
 ) error {
-	// Create a transaction object to hold the state transition
-	transaction := &stateTransaction{
-		nodeName:      nodeName,
-		event:         event,
-		data:          data,
-		initialState:  "",
-		targetState:   "",
-		currentStatus: nil,
-		newStatus:     nil,
-		executed:      false,
-	}
-
-	// Prepare the transaction
-	if err := a.sm.prepareTransaction(ctx, transaction); err != nil {
-		return fmt.Errorf("failed to prepare transaction: %w", err)
-	}
-
-	// Check context after preparation
-	if err := common.CheckContext(ctx); err != nil {
-		return fmt.Errorf("context error after preparing transaction: %w", err)
-	}
-
-	// No state change needed, just update data
-	if transaction.targetState == "" || transaction.initialState == transaction.targetState {
-		return a.sm.executeSimpleUpdate(ctx, transaction)
-	}
-
-	// Execute the full state transition
-	return a.sm.executeStateTransition(ctx, transaction)
+	// Call the HandleEvent method on the state machine
+	return a.sm.HandleEvent(ctx, nodeName, event, data)
 }
 
 // New type for tracking state transitions

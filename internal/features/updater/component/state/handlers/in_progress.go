@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"context"
+	"fmt"
+	"k2p-updater/internal/common"
 	"k2p-updater/internal/features/updater/domain/interfaces"
 	"k2p-updater/internal/features/updater/domain/models"
 	"k2p-updater/pkg/resource"
@@ -10,21 +12,37 @@ import (
 
 // inProgressHandler handles the InProgressVmSpecUp state
 type inProgressHandler struct {
-	resourceFactory *resource.Factory
+	*BaseStateHandler
 }
 
 // NewInProgressHandler creates a new handler for InProgressVmSpecUp state
 func NewInProgressHandler(resourceFactory *resource.Factory) interfaces.StateHandler {
+	// Define supported events for this state
+	supportedEvents := []models.Event{
+		models.EventSpecUpRequested,
+		models.EventSpecUpCompleted,
+		models.EventHealthCheckPassed,
+		models.EventHealthCheckFailed,
+		models.EventSpecUpFailed,
+	}
+
 	return &inProgressHandler{
-		resourceFactory: resourceFactory,
+		BaseStateHandler: NewBaseStateHandler(resourceFactory, supportedEvents),
 	}
 }
 
 // Handle processes events for the InProgressVmSpecUp state
-func (h *inProgressHandler) Handle(ctx context.Context, status *models.ControlPlaneStatus, event models.Event, data map[string]interface{}) (*models.ControlPlaneStatus, error) {
-	// Check for context cancellation at the beginning
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+func (h *inProgressHandler) Handle(ctx context.Context, status *models.ControlPlaneStatus,
+	event models.Event, data map[string]interface{}) (*models.ControlPlaneStatus, error) {
+
+	// Check context first
+	if err := common.CheckContextWithOp(ctx, "handling in-progress state event"); err != nil {
+		return nil, err
+	}
+
+	// Verify the event is supported
+	if !h.IsEventSupported(event) {
+		return nil, fmt.Errorf("event %s is not supported in InProgressVmSpecUp state", event)
 	}
 
 	// Create a copy of the status to work with
@@ -34,11 +52,6 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *models.ControlPl
 
 	switch event {
 	case models.EventSpecUpRequested:
-		// Check for context cancellation
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
 		log.Printf("IN_PROGRESS HANDLER: Spec up requested for node %s", status.NodeName)
 		// Update status to indicate spec up was requested successfully
 		newStatus.SpecUpRequested = true
@@ -52,52 +65,27 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *models.ControlPl
 			}
 		}
 
-		return &newStatus, nil
-
 	case models.EventSpecUpCompleted:
-		// Check for context cancellation
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
 		log.Printf("IN_PROGRESS HANDLER: Spec up completed for node %s, waiting for health check", status.NodeName)
 		// Backend says spec up is complete, now waiting for health check
 		newStatus.SpecUpCompleted = true
 		newStatus.Message = "VM spec up completed, performing health check"
-		return &newStatus, nil
 
 	case models.EventHealthCheckPassed:
-		// Check for context cancellation
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
 		log.Printf("IN_PROGRESS HANDLER: Health check passed for node %s, transitioning to CompletedVmSpecUp", status.NodeName)
 		// When health check passes, transition to completed state
 		newStatus.CurrentState = models.StateCompletedVmSpecUp
 		newStatus.HealthCheckPassed = true
 		newStatus.Message = "VM spec up successful, health check passed"
-		return &newStatus, nil
 
 	case models.EventHealthCheckFailed:
-		// Check for context cancellation
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
 		log.Printf("IN_PROGRESS HANDLER: Health check failed for node %s, transitioning to FailedVmSpecUp", status.NodeName)
 		// When health check fails, transition to failed state
 		newStatus.CurrentState = models.StateFailedVmSpecUp
 		newStatus.HealthCheckPassed = false
 		newStatus.Message = "VM spec up failed health check"
-		return &newStatus, nil
 
 	case models.EventSpecUpFailed:
-		// Check for context cancellation
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
 		log.Printf("IN_PROGRESS HANDLER: Spec up failed for node %s, transitioning to FailedVmSpecUp", status.NodeName)
 		// When spec up process fails for any reason
 		newStatus.CurrentState = models.StateFailedVmSpecUp
@@ -110,30 +98,26 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *models.ControlPl
 				log.Printf("IN_PROGRESS HANDLER: Failure reason for node %s: %s", status.NodeName, errMsg)
 			}
 		}
-
-		return &newStatus, nil
-	default:
-		// Check for context cancellation
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		log.Printf("IN_PROGRESS HANDLER: Unhandled event %s for node %s, no state change", event, status.NodeName)
 	}
 
-	// Final context check before returning the default response
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+	// Final context check
+	if err := common.CheckContextWithOp(ctx, "completing in-progress handler"); err != nil {
+		return nil, err
 	}
 
-	// Default: no state change for other events
 	return &newStatus, nil
 }
 
 // OnEnter is called when entering the InProgressVmSpecUp state
 func (h *inProgressHandler) OnEnter(ctx context.Context, status *models.ControlPlaneStatus) (*models.ControlPlaneStatus, error) {
+	// Call base method first for context check
+	if _, err := h.BaseStateHandler.OnEnter(ctx, status); err != nil {
+		return nil, err
+	}
+
 	log.Printf("VM state transition: Node %s transitioning from %s to InProgressVmSpecUp",
 		status.NodeName, status.CurrentState)
+
 	newStatus := *status
 
 	// Record the VM state transition event
@@ -156,16 +140,34 @@ func (h *inProgressHandler) OnEnter(ctx context.Context, status *models.ControlP
 		log.Printf("Successfully recorded VM state transition event for node %s", status.NodeName)
 	}
 
+	newStatus.Message = fmt.Sprintf("Starting VM spec up operation with CPU at %.2f%%",
+		status.WindowAverageUtilization)
+
 	return &newStatus, nil
 }
 
 // OnExit is called when exiting the InProgressVmSpecUp state
 func (h *inProgressHandler) OnExit(ctx context.Context, status *models.ControlPlaneStatus) (*models.ControlPlaneStatus, error) {
-	// Check for context cancellation
-	if ctx.Err() != nil {
-		return nil, ctx.Err()
+	// Call base method first for context check
+	if _, err := h.BaseStateHandler.OnExit(ctx, status); err != nil {
+		return nil, err
 	}
 
-	// Nothing special to do on exit
+	// Record the transition event
+	err := h.resourceFactory.Event().NormalRecordWithNode(
+		ctx,
+		models.UpdateKey,
+		status.NodeName,
+		"ExitingInProgressState",
+		"Node %s completed in-progress processing with outcome: %s",
+		status.NodeName,
+		status.Message,
+	)
+
+	if err != nil {
+		log.Printf("Failed to record exit event for node %s: %v", status.NodeName, err)
+		// Don't return error as we don't want to prevent state transition
+	}
+
 	return status, nil
 }

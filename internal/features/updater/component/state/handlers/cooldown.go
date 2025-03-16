@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"k2p-updater/internal/common"
 	"k2p-updater/internal/features/updater/domain/interfaces"
 	"k2p-updater/internal/features/updater/domain/models"
 	"k2p-updater/pkg/resource"
@@ -13,27 +14,46 @@ import (
 
 // coolDownHandler handles the CoolDown state
 type coolDownHandler struct {
-	resourceFactory *resource.Factory
-	lastEventTime   map[string]time.Time
-	lastStatusTime  map[string]time.Time
-	eventMutex      sync.RWMutex
-	eventInterval   time.Duration // Interval between events
-	statusInterval  time.Duration // Interval between CR status updates
+	*BaseStateHandler
+	lastEventTime  map[string]time.Time
+	lastStatusTime map[string]time.Time
+	eventMutex     sync.RWMutex
+	eventInterval  time.Duration // Interval between events
+	statusInterval time.Duration // Interval between CR status updates
 }
 
 // NewCoolDownHandler creates a new handler for CoolDown state
 func NewCoolDownHandler(resourceFactory *resource.Factory) interfaces.StateHandler {
+	// Define supported events for this state
+	supportedEvents := []models.Event{
+		models.EventInitialize,
+		models.EventCooldownStatus,
+		models.EventCooldownEnded,
+	}
+
 	return &coolDownHandler{
-		resourceFactory: resourceFactory,
-		lastEventTime:   make(map[string]time.Time),
-		lastStatusTime:  make(map[string]time.Time),
-		eventInterval:   5 * time.Minute, // Event interval
-		statusInterval:  1 * time.Minute, // CR update interval set to 1 minute
+		BaseStateHandler: NewBaseStateHandler(resourceFactory, supportedEvents),
+		lastEventTime:    make(map[string]time.Time),
+		lastStatusTime:   make(map[string]time.Time),
+		eventInterval:    5 * time.Minute,
+		statusInterval:   1 * time.Minute,
 	}
 }
 
 // Handle processes events for the CoolDown state
-func (h *coolDownHandler) Handle(ctx context.Context, status *models.ControlPlaneStatus, event models.Event, data map[string]interface{}) (*models.ControlPlaneStatus, error) {
+func (h *coolDownHandler) Handle(ctx context.Context, status *models.ControlPlaneStatus,
+	event models.Event, data map[string]interface{}) (*models.ControlPlaneStatus, error) {
+
+	// Check context first
+	if err := common.CheckContextWithOp(ctx, "handling cooldown state event"); err != nil {
+		return nil, err
+	}
+
+	// Verify the event is supported
+	if !h.IsEventSupported(event) {
+		return nil, fmt.Errorf("event %s is not supported in CoolDown state", event)
+	}
+
 	// Create a copy of the status to work with
 	newStatus := *status
 
@@ -60,8 +80,6 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *models.ControlPlan
 				newStatus.WindowAverageUtilization = windowAvg
 			}
 		}
-
-		return &newStatus, nil
 
 	case models.EventCooldownStatus:
 		// Update cooldown remaining message
@@ -110,11 +128,8 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *models.ControlPlan
 			newStatus.CPUUtilization,
 			newStatus.WindowAverageUtilization)
 
-		return &newStatus, nil
-
 	case models.EventCooldownEnded:
-		// Transition DIRECTLY to Monitoring state when cooldown ends
-		// Skip the PendingVmSpecUp state completely to avoid race conditions
+		// Transition to Monitoring state when cooldown ends
 		newStatus.CurrentState = models.StateMonitoring
 		newStatus.Message = "Cooldown period ended, now monitoring CPU utilization"
 
@@ -128,28 +143,25 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *models.ControlPlan
 			}
 		}
 
-		log.Printf("COOLDOWN ENDED: Node %s transitioning directly from CoolDown to Monitoring",
+		log.Printf("COOLDOWN ENDED: Node %s transitioning from CoolDown to Monitoring",
 			status.NodeName)
-
-		// Create a state transition event
-		h.resourceFactory.Event().NormalRecordWithNode(
-			ctx,
-			models.UpdateKey,
-			status.NodeName,
-			string(models.StatePendingVmSpecUp),
-			"Node %s state changed from CoolDown to Monitoring, cooldown period completed",
-			status.NodeName,
-		)
-
-		return &newStatus, nil
 	}
 
-	// Default: no state change for other events
+	// Final context check
+	if err := common.CheckContextWithOp(ctx, "completing cooldown handler"); err != nil {
+		return nil, err
+	}
+
 	return &newStatus, nil
 }
 
 // OnEnter is called when entering the CoolDown state
 func (h *coolDownHandler) OnEnter(ctx context.Context, status *models.ControlPlaneStatus) (*models.ControlPlaneStatus, error) {
+	// Call base method first for context check
+	if _, err := h.BaseStateHandler.OnEnter(ctx, status); err != nil {
+		return nil, err
+	}
+
 	newStatus := *status
 
 	// Make sure CoolDownEndTime is set
@@ -172,18 +184,41 @@ func (h *coolDownHandler) OnEnter(ctx context.Context, status *models.ControlPla
 		status.NodeName,
 		cooldownMinutes,
 	)
+
 	if err != nil {
-		log.Printf("Failed to record completion event for node %s: %v", status.NodeName, err)
+		log.Printf("Failed to record cooldown entry event for node %s: %v", status.NodeName, err)
 		// Don't return error as we don't want to prevent state transition
 	} else {
-		log.Printf("Successfully recorded completion event for node %s", status.NodeName)
+		log.Printf("Successfully recorded cooldown entry event for node %s", status.NodeName)
 	}
+
+	newStatus.Message = fmt.Sprintf("In cooldown period, %.1f minutes remaining", cooldownMinutes)
 
 	return &newStatus, nil
 }
 
 // OnExit is called when exiting the CoolDown state
 func (h *coolDownHandler) OnExit(ctx context.Context, status *models.ControlPlaneStatus) (*models.ControlPlaneStatus, error) {
-	// Nothing special to do on exit
+	// Call base method first for context check
+	if _, err := h.BaseStateHandler.OnExit(ctx, status); err != nil {
+		return nil, err
+	}
+
+	// Record the exit event
+	err := h.resourceFactory.Event().NormalRecordWithNode(
+		ctx,
+		models.UpdateKey,
+		status.NodeName,
+		"ExitingCooldown",
+		"Node %s exiting cooldown period after %.1f minutes",
+		status.NodeName,
+		time.Since(status.LastTransitionTime).Minutes(),
+	)
+
+	if err != nil {
+		log.Printf("Failed to record cooldown exit event for node %s: %v", status.NodeName, err)
+		// Don't return error as we don't want to prevent state transition
+	}
+
 	return status, nil
 }

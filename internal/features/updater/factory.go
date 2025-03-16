@@ -24,6 +24,67 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// ComponentFactory defines an interface for creating updater components
+type ComponentFactory interface {
+	CreateBackendClient(config *app.BackendConfig) interfaces.BackendClient
+	CreateHealthVerifier(exporterService domainExporter.Provider) interfaces.HealthVerifier
+	CreateStateMachine(resourceFactory *resource.Factory) interfaces.StateMachine
+	CreateMetricsComponent(metricsService domainMetric.Provider, stateMachine interfaces.StateMachine, config *app.MetricsConfig) interfaces.MetricsProvider
+	CreateNodeDiscoverer(kubeClient kubernetes.Interface, namespace string) interfaces.NodeDiscoverer
+	CreateCoordinator(stateMachine interfaces.StateMachine) interfaces.Coordinator
+	CreateRecoveryManager(stateMachine interfaces.StateMachine) interfaces.RecoveryManager
+	CreateResourceFactoryAdapter(resourceFactory *resource.Factory) interfaces.ResourceFactory
+}
+
+// DefaultComponentFactory is the default implementation of ComponentFactory
+type DefaultComponentFactory struct{}
+
+// NewDefaultComponentFactory creates a new default component factory
+func NewDefaultComponentFactory() ComponentFactory {
+	return &DefaultComponentFactory{}
+}
+
+// CreateBackendClient creates a new backend client
+func (f *DefaultComponentFactory) CreateBackendClient(config *app.BackendConfig) interfaces.BackendClient {
+	httpClient := &http.Client{Timeout: config.Timeout}
+	return backend.NewBackendClient(config, httpClient)
+}
+
+// CreateHealthVerifier creates a new health verifier
+func (f *DefaultComponentFactory) CreateHealthVerifier(exporterService domainExporter.Provider) interfaces.HealthVerifier {
+	return health.NewHealthVerifier(exporterService)
+}
+
+// CreateStateMachine creates a new state machine
+func (f *DefaultComponentFactory) CreateStateMachine(resourceFactory *resource.Factory) interfaces.StateMachine {
+	return state.NewStateMachineWithDefaultHandlers(resourceFactory)
+}
+
+// CreateMetricsComponent creates a new metrics component
+func (f *DefaultComponentFactory) CreateMetricsComponent(metricsService domainMetric.Provider, stateMachine interfaces.StateMachine, config *app.MetricsConfig) interfaces.MetricsProvider {
+	return metrics.NewMetricsComponent(metricsService, stateMachine, config)
+}
+
+// CreateNodeDiscoverer creates a new node discoverer
+func (f *DefaultComponentFactory) CreateNodeDiscoverer(kubeClient kubernetes.Interface, namespace string) interfaces.NodeDiscoverer {
+	return coordination.NewNodeDiscoverer(kubeClient, namespace)
+}
+
+// CreateCoordinator creates a new coordinator
+func (f *DefaultComponentFactory) CreateCoordinator(stateMachine interfaces.StateMachine) interfaces.Coordinator {
+	return coordination.NewCoordinationManager(stateMachine)
+}
+
+// CreateRecoveryManager creates a new recovery manager
+func (f *DefaultComponentFactory) CreateRecoveryManager(stateMachine interfaces.StateMachine) interfaces.RecoveryManager {
+	return recovery.NewRecoveryManager(stateMachine)
+}
+
+// CreateResourceFactoryAdapter creates a new resource factory adapter
+func (f *DefaultComponentFactory) CreateResourceFactoryAdapter(resourceFactory *resource.Factory) interfaces.ResourceFactory {
+	return resourceUpdater.NewResourceFactoryAdapter(resourceFactory)
+}
+
 // NewProvider creates and initializes a new updater provider with dependencies
 func NewProvider(
 	ctx context.Context,
@@ -32,9 +93,14 @@ func NewProvider(
 	exporterService domainExporter.Provider,
 	resourceFactory *resource.Factory,
 	kubeClient kubernetes.Interface,
-	// Optional dependencies for testing
+	componentFactory ComponentFactory,
 	options ...ProviderOption,
 ) (interfaces.Provider, error) {
+	// Use default component factory if not provided
+	if componentFactory == nil {
+		componentFactory = NewDefaultComponentFactory()
+	}
+
 	// Initialize provider options with defaults
 	opts := &providerOptions{}
 	for _, option := range options {
@@ -51,24 +117,26 @@ func NewProvider(
 		Namespace:              config.Kubernetes.Namespace,
 	}
 
-	// Create resource factory adapter for the domain interface
-	resourceFactoryAdapter := resourceUpdater.NewResourceFactoryAdapter(resourceFactory)
+	// Create resource factory adapter
+	resourceFactoryAdapter := opts.resourceFactory
+	if resourceFactoryAdapter == nil {
+		resourceFactoryAdapter = componentFactory.CreateResourceFactoryAdapter(resourceFactory)
+	}
 
 	// Create dependencies if not provided (for backwards compatibility)
 	backendClient := opts.backendClient
 	if backendClient == nil {
-		httpClient := &http.Client{Timeout: config.Backend.Timeout}
-		backendClient = backend.NewBackendClient(&config.Backend, httpClient)
+		backendClient = componentFactory.CreateBackendClient(&config.Backend)
 	}
 
 	healthVerifier := opts.healthVerifier
 	if healthVerifier == nil {
-		healthVerifier = health.NewHealthVerifier(exporterService)
+		healthVerifier = componentFactory.CreateHealthVerifier(exporterService)
 	}
 
 	stateMachine := opts.stateMachine
 	if stateMachine == nil {
-		stateMachine = state.NewStateMachineWithDefaultHandlers(resourceFactory)
+		stateMachine = componentFactory.CreateStateMachine(resourceFactory)
 	}
 
 	metricsComponent := opts.metricsComponent
@@ -80,27 +148,27 @@ func NewProvider(
 			ScaleTrigger:   config.Updater.ScaleThreshold,
 		}
 
-		// Use the metrics factory to create the component
-		metricsComponent = metrics.NewMetricsComponent(
+		// Use the component factory to create the component
+		metricsComponent = componentFactory.CreateMetricsComponent(
 			metricsService,
-			stateMachine, // as StateUpdater
+			stateMachine,
 			metricsConfig,
 		)
 	}
 
 	nodeDiscoverer := opts.nodeDiscoverer
 	if nodeDiscoverer == nil {
-		nodeDiscoverer = coordination.NewNodeDiscoverer(kubeClient, config.Kubernetes.Namespace)
+		nodeDiscoverer = componentFactory.CreateNodeDiscoverer(kubeClient, config.Kubernetes.Namespace)
 	}
 
 	coordinator := opts.coordinator
 	if coordinator == nil {
-		coordinator = coordination.NewCoordinationManager(stateMachine)
+		coordinator = componentFactory.CreateCoordinator(stateMachine)
 	}
 
 	recoveryManager := opts.recoveryManager
 	if recoveryManager == nil {
-		recoveryManager = recovery.NewRecoveryManager(stateMachine)
+		recoveryManager = componentFactory.CreateRecoveryManager(stateMachine)
 	}
 
 	// Create updater service with all dependencies injected
@@ -124,6 +192,16 @@ func NewProvider(
 	return updaterService, nil
 }
 
+// ProviderOption defines a functional option for configuring the provider
+type ProviderOption func(*providerOptions)
+
+// WithResourceFactory new option for resource factory
+func WithResourceFactory(factory interfaces.ResourceFactory) ProviderOption {
+	return func(o *providerOptions) {
+		o.resourceFactory = factory
+	}
+}
+
 // providerOptions holds optional dependencies for the provider
 type providerOptions struct {
 	backendClient    interfaces.BackendClient
@@ -133,10 +211,8 @@ type providerOptions struct {
 	nodeDiscoverer   interfaces.NodeDiscoverer
 	coordinator      interfaces.Coordinator
 	recoveryManager  interfaces.RecoveryManager
+	resourceFactory  interfaces.ResourceFactory // Added this field
 }
-
-// ProviderOption defines a functional option for configuring the provider
-type ProviderOption func(*providerOptions)
 
 // WithBackendClient sets a custom backend client
 func WithBackendClient(client interfaces.BackendClient) ProviderOption {

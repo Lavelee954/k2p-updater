@@ -17,7 +17,7 @@ import (
 	"k2p-updater/internal/features/exporter"
 	exporterDomain "k2p-updater/internal/features/exporter/domain"
 	"k2p-updater/internal/features/metric"
-	metricDomain "k2p-updater/internal/features/metric/domain"
+	"k2p-updater/internal/features/metric/domain"
 	"k2p-updater/internal/features/updater"
 	"k2p-updater/internal/features/updater/domain/interfaces"
 	"k2p-updater/pkg/resource"
@@ -30,7 +30,7 @@ type Server struct {
 	cfg             *app.Config
 	kubeClients     *app.KubeClients
 	exporterSvc     exporterDomain.Provider
-	metricsSvc      metricDomain.Provider
+	metricsSvc      domain.Provider
 	resourceFactory *resource.Factory
 	updaterSvc      interfaces.Provider
 	httpServer      *http.Server
@@ -38,7 +38,7 @@ type Server struct {
 }
 
 // NewServer creates a new server instance with all dependencies initialized.
-func NewServer(ctx context.Context) (*Server, error) {
+func NewServer() (*Server, error) {
 	// Load configuration
 	cfg, err := app.Load()
 	if err != nil {
@@ -124,6 +124,9 @@ func (s *Server) Initialize(ctx context.Context) error {
 	updaterCtx, updaterCancel := context.WithTimeout(initCtx, 30*time.Second)
 	defer updaterCancel()
 
+	// Create component factory
+	componentFactory := updater.NewDefaultComponentFactory()
+
 	updaterProvider, err := updater.NewProvider(
 		updaterCtx,
 		s.cfg,
@@ -131,6 +134,7 @@ func (s *Server) Initialize(ctx context.Context) error {
 		s.exporterSvc,
 		s.resourceFactory,
 		s.kubeClients.FullClientSet,
+		componentFactory,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to initialize updater service: %w", err)
@@ -257,7 +261,7 @@ func Run() int {
 	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
 	// Initialize the server
-	server, err := NewServer(ctx)
+	server, err := NewServer()
 	if err != nil {
 		log.Printf("Failed to create server: %v", err)
 		return 1

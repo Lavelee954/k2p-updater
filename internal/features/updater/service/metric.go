@@ -49,39 +49,251 @@ type MetricsComponent interface {
 	GetMetricsState(nodeName string) MetricsState
 }
 
-// DefaultMetricsComponent implements the MetricsComponent interface
-type DefaultMetricsComponent struct {
+// MetricsCollector is responsible for collecting metrics data
+type MetricsCollector interface {
+	GetNodeCPUMetrics(nodeName string) (float64, float64, error)
+}
+
+// MetricsAnalyzer is responsible for analyzing metrics data
+type MetricsAnalyzer interface {
+	IsWindowReadyForScaling(ctx context.Context, nodeName string) (bool, error)
+	CheckCPUThresholdExceeded(ctx context.Context, nodeName string, currentCPU, windowAvg float64) (bool, error)
+}
+
+// MetricsStateTracker is responsible for tracking metrics collection state
+type MetricsStateTracker interface {
+	GetMetricsState(nodeName string) MetricsState
+	UpdateMetricsState(nodeName string, state MetricsState, message string)
+	StartMonitoring(ctx context.Context) error
+}
+
+// MetricsManager orchestrates the metrics components
+type MetricsManager struct {
+	collector      MetricsCollector
+	analyzer       MetricsAnalyzer
+	stateTracker   MetricsStateTracker
+	stateMachine   domain.StateMachine
+	metricsService domainMetric.Provider
+}
+
+// NewMetricsManager creates a new metrics manager
+func NewMetricsManager(
+	collector MetricsCollector,
+	analyzer MetricsAnalyzer,
+	stateTracker MetricsStateTracker,
+	stateMachine domain.StateMachine,
+	metricsService domainMetric.Provider,
+) *MetricsManager {
+	return &MetricsManager{
+		collector:      collector,
+		analyzer:       analyzer,
+		stateTracker:   stateTracker,
+		stateMachine:   stateMachine,
+		metricsService: metricsService,
+	}
+}
+
+// GetNodeCPUMetrics returns the current and window average CPU metrics for a node
+func (m *MetricsManager) GetNodeCPUMetrics(nodeName string) (float64, float64, error) {
+	return m.collector.GetNodeCPUMetrics(nodeName)
+}
+
+// IsWindowReadyForScaling checks if the window is mature enough for scaling decisions
+func (m *MetricsManager) IsWindowReadyForScaling(ctx context.Context, nodeName string) (bool, error) {
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+
+	metricsState := m.stateTracker.GetMetricsState(nodeName)
+	if metricsState != MetricsReady {
+		return false, nil
+	}
+
+	return m.analyzer.IsWindowReadyForScaling(ctx, nodeName)
+}
+
+// CheckCPUThresholdExceeded determines if a node's CPU utilization exceeds the threshold
+func (m *MetricsManager) CheckCPUThresholdExceeded(ctx context.Context, nodeName string) (bool, float64, float64, error) {
+	if ctx.Err() != nil {
+		return false, 0, 0, ctx.Err()
+	}
+
+	metricsState := m.stateTracker.GetMetricsState(nodeName)
+	if metricsState != MetricsReady {
+		currentCPU, windowAvg, _ := m.GetNodeCPUMetrics(nodeName)
+		return false, currentCPU, windowAvg, nil
+	}
+
+	currentCPU, windowAvg, err := m.GetNodeCPUMetrics(nodeName)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, 0, 0, ctx.Err()
+		}
+		return false, 0, 0, fmt.Errorf("failed to get CPU metrics: %w", err)
+	}
+
+	thresholdExceeded, err := m.analyzer.CheckCPUThresholdExceeded(ctx, nodeName, currentCPU, windowAvg)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, 0, 0, ctx.Err()
+		}
+		return false, currentCPU, windowAvg, err
+	}
+
+	if thresholdExceeded {
+		log.Printf("CPU threshold exceeded for node %s: %.2f%%", nodeName, windowAvg)
+	}
+
+	return thresholdExceeded, currentCPU, windowAvg, nil
+}
+
+// StartMonitoring begins background monitoring of metrics states
+func (m *MetricsManager) StartMonitoring(ctx context.Context) error {
+	return m.stateTracker.StartMonitoring(ctx)
+}
+
+// GetMetricsState returns the current metrics collection state for a node
+func (m *MetricsManager) GetMetricsState(nodeName string) MetricsState {
+	return m.stateTracker.GetMetricsState(nodeName)
+}
+
+// DefaultMetricsCollector implements the MetricsCollector interface
+type DefaultMetricsCollector struct {
+	metricsService domainMetric.Provider
+}
+
+// NewMetricsCollector creates a new metrics collector
+func NewMetricsCollector(
+	metricsService domainMetric.Provider,
+) *DefaultMetricsCollector {
+	return &DefaultMetricsCollector{
+		metricsService: metricsService,
+	}
+}
+
+// GetNodeCPUMetrics returns the current and window average CPU metrics for a node
+func (c *DefaultMetricsCollector) GetNodeCPUMetrics(nodeName string) (float64, float64, error) {
+	currentCPU, err := c.metricsService.GetNodeCPUUsage(nodeName)
+	if err != nil {
+		if common.IsNodeNotFoundError(err) {
+			log.Printf("Node %s registered but metrics not yet available - using default values", nodeName)
+			return 0.0, 0.0, nil
+		}
+		return 0, 0, fmt.Errorf("failed to get current CPU usage: %w", err)
+	}
+
+	windowAvg, err := c.metricsService.GetWindowAverageCPU(nodeName)
+	if err != nil {
+		log.Printf("Window average not yet available for node %s, using current value", nodeName)
+		windowAvg = currentCPU
+	}
+
+	return currentCPU, windowAvg, nil
+}
+
+// DefaultMetricsAnalyzer implements the MetricsAnalyzer interface
+type DefaultMetricsAnalyzer struct {
+	metricsService domainMetric.Provider
+	config         *app.MetricsConfig
+}
+
+// NewMetricsAnalyzer creates a new metrics analyzer
+func NewMetricsAnalyzer(
+	metricsService domainMetric.Provider,
+	config *app.MetricsConfig,
+) *DefaultMetricsAnalyzer {
+	return &DefaultMetricsAnalyzer{
+		metricsService: metricsService,
+		config:         config,
+	}
+}
+
+// IsWindowReadyForScaling checks if the window is mature enough for scaling decisions
+func (a *DefaultMetricsAnalyzer) IsWindowReadyForScaling(ctx context.Context, nodeName string) (bool, error) {
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+
+	window, exists := a.metricsService.GetWindow(nodeName)
+	if !exists {
+		return false, nil
+	}
+
+	values := window.GetWindowValues()
+	return len(values) >= window.MinSamples, nil
+}
+
+// CheckCPUThresholdExceeded determines if a node's CPU utilization exceeds the threshold
+func (a *DefaultMetricsAnalyzer) CheckCPUThresholdExceeded(ctx context.Context, nodeName string, currentCPU, windowAvg float64) (bool, error) {
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+
+	return windowAvg > a.config.ScaleTrigger, nil
+}
+
+// DefaultMetricsStateTracker implements the MetricsStateTracker interface
+type DefaultMetricsStateTracker struct {
 	metricsService domainMetric.Provider
 	stateMachine   domain.StateMachine
-	config         *app.MetricsConfig
 
-	// Status tracking
 	nodeStatus  map[string]*NodeMetricsStatus
 	statusMutex sync.RWMutex
 }
 
-// NewMetricsComponent creates a new DefaultMetricsComponent
-func NewMetricsComponent(
+// NewMetricsStateTracker creates a new metrics state tracker
+func NewMetricsStateTracker(
 	metricsService domainMetric.Provider,
 	stateMachine domain.StateMachine,
-	config *app.MetricsConfig,
-) MetricsComponent {
-	return &DefaultMetricsComponent{
+) *DefaultMetricsStateTracker {
+	return &DefaultMetricsStateTracker{
 		metricsService: metricsService,
 		stateMachine:   stateMachine,
-		config:         config,
 		nodeStatus:     make(map[string]*NodeMetricsStatus),
 	}
 }
 
+// GetMetricsState returns the current metrics collection state for a node
+func (s *DefaultMetricsStateTracker) GetMetricsState(nodeName string) MetricsState {
+	s.statusMutex.RLock()
+	defer s.statusMutex.RUnlock()
+
+	status, exists := s.nodeStatus[nodeName]
+	if !exists {
+		return MetricsInitializing
+	}
+	return status.State
+}
+
+// UpdateMetricsState updates the metrics state for a node
+func (s *DefaultMetricsStateTracker) UpdateMetricsState(nodeName string, state MetricsState, message string) {
+	s.statusMutex.Lock()
+	defer s.statusMutex.Unlock()
+
+	status, exists := s.nodeStatus[nodeName]
+	if !exists {
+		status = &NodeMetricsStatus{
+			State:       state,
+			LastUpdated: time.Now(),
+			Message:     message,
+		}
+		s.nodeStatus[nodeName] = status
+		return
+	}
+
+	status.State = state
+	status.LastUpdated = time.Now()
+	status.Message = message
+}
+
 // StartMonitoring begins background monitoring of metrics states
-func (c *DefaultMetricsComponent) StartMonitoring(ctx context.Context) error {
-	go c.monitorNodesReadiness(ctx)
+func (s *DefaultMetricsStateTracker) StartMonitoring(ctx context.Context) error {
+	go s.monitorNodesReadiness(ctx)
 	return nil
 }
 
 // monitorNodesReadiness periodically checks if nodes have metrics available
-func (c *DefaultMetricsComponent) monitorNodesReadiness(ctx context.Context) {
+func (s *DefaultMetricsStateTracker) monitorNodesReadiness(ctx context.Context) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
@@ -91,13 +303,12 @@ func (c *DefaultMetricsComponent) monitorNodesReadiness(ctx context.Context) {
 			log.Printf("Metrics monitoring stopped due to context cancellation: %v", ctx.Err())
 			return
 		case <-ticker.C:
-			// Check for context cancellation before processing
 			if ctx.Err() != nil {
 				log.Printf("Skipping metrics readiness check due to context cancellation: %v", ctx.Err())
 				return
 			}
 
-			if err := c.checkAllNodesMetricsReadiness(ctx); err != nil {
+			if err := s.checkAllNodesMetricsReadiness(ctx); err != nil {
 				if errors.Is(err, context.Canceled) {
 					log.Printf("Metrics readiness check canceled: %v", err)
 					return
@@ -109,70 +320,65 @@ func (c *DefaultMetricsComponent) monitorNodesReadiness(ctx context.Context) {
 }
 
 // checkAllNodesMetricsReadiness verifies metrics readiness for all nodes
-func (c *DefaultMetricsComponent) checkAllNodesMetricsReadiness(ctx context.Context) error {
-	// Add a check for context cancellation at the beginning
+func (s *DefaultMetricsStateTracker) checkAllNodesMetricsReadiness(ctx context.Context) error {
 	if ctx.Err() != nil {
 		log.Printf("Skipping metrics readiness check due to context cancellation: %v", ctx.Err())
 		return ctx.Err()
 	}
 
-	c.statusMutex.RLock()
-	nodes := make([]string, 0, len(c.nodeStatus))
-	for node := range c.nodeStatus {
+	s.statusMutex.RLock()
+	nodes := make([]string, 0, len(s.nodeStatus))
+	for node := range s.nodeStatus {
 		nodes = append(nodes, node)
 	}
-	c.statusMutex.RUnlock()
+	s.statusMutex.RUnlock()
 
 	for _, nodeName := range nodes {
-		// Check context cancellation during iteration
 		if ctx.Err() != nil {
 			log.Printf("Stopping metrics readiness check due to context cancellation: %v", ctx.Err())
 			return ctx.Err()
 		}
 
-		// Call the method directly as in the original code
-		c.checkNodeMetricsReadiness(ctx, nodeName)
+		s.checkNodeMetricsReadiness(ctx, nodeName)
 	}
 
 	return nil
 }
 
 // checkNodeMetricsReadiness checks if metrics are available for a specific node
-func (c *DefaultMetricsComponent) checkNodeMetricsReadiness(ctx context.Context, nodeName string) {
-	// Check for context cancellation at the beginning
+func (s *DefaultMetricsStateTracker) checkNodeMetricsReadiness(ctx context.Context, nodeName string) {
 	if ctx.Err() != nil {
 		log.Printf("Skipping node metrics readiness check due to context cancellation: %v", ctx.Err())
 		return
 	}
 
-	c.statusMutex.Lock()
-	status, exists := c.nodeStatus[nodeName]
+	s.statusMutex.Lock()
+	status, exists := s.nodeStatus[nodeName]
 	if !exists {
 		status = &NodeMetricsStatus{
 			State:       MetricsInitializing,
 			LastUpdated: time.Now(),
 			Message:     "Initializing metrics collection",
 		}
-		c.nodeStatus[nodeName] = status
+		s.nodeStatus[nodeName] = status
 	}
 	status.LastCheckTime = time.Now()
-	c.statusMutex.Unlock()
+	s.statusMutex.Unlock()
 
 	// Skip checks for nodes already in Ready state
 	if status.State == MetricsReady {
 		return
 	}
 
-	// Check if context is still valid
 	if ctx.Err() != nil {
 		log.Printf("Context canceled during metrics readiness check: %v", ctx.Err())
 		return
 	}
 
 	// Check if metrics are available
-	_, err := c.metricsService.GetNodeCPUUsage(nodeName)
+	_, err := s.metricsService.GetNodeCPUUsage(nodeName)
 	if err != nil {
-		c.statusMutex.Lock()
+		s.statusMutex.Lock()
 		status.RetryCount++
 		if status.RetryCount > 10 {
 			status.State = MetricsError
@@ -180,23 +386,22 @@ func (c *DefaultMetricsComponent) checkNodeMetricsReadiness(ctx context.Context,
 		} else {
 			status.Message = fmt.Sprintf("Waiting for metrics to become available (attempt %d)", status.RetryCount)
 		}
-		c.statusMutex.Unlock()
+		s.statusMutex.Unlock()
 		return
 	}
 
-	// Check if context is still valid
 	if ctx.Err() != nil {
 		log.Printf("Context canceled during metrics window check: %v", ctx.Err())
 		return
 	}
 
 	// Metrics are available, now check window
-	window, exists := c.metricsService.GetWindow(nodeName)
+	window, exists := s.metricsService.GetWindow(nodeName)
 	if !exists {
-		c.statusMutex.Lock()
+		s.statusMutex.Lock()
 		status.State = MetricsCollecting
 		status.Message = "Window not yet available, metrics collection starting"
-		c.statusMutex.Unlock()
+		s.statusMutex.Unlock()
 		return
 	}
 
@@ -205,7 +410,7 @@ func (c *DefaultMetricsComponent) checkNodeMetricsReadiness(ctx context.Context,
 	windowAge := time.Since(window.CreationTime)
 	minRequiredAge := window.WindowSize / 2
 
-	c.statusMutex.Lock()
+	s.statusMutex.Lock()
 	if windowAge < minRequiredAge || len(values) < window.MinSamples {
 		status.State = MetricsCollecting
 		status.Message = fmt.Sprintf("Collecting data: %d/%d samples, age: %v/%v",
@@ -219,31 +424,29 @@ func (c *DefaultMetricsComponent) checkNodeMetricsReadiness(ctx context.Context,
 		status.Message = "Metrics collection complete, ready for scaling decisions"
 	}
 	status.LastUpdated = time.Now()
-	c.statusMutex.Unlock()
+	s.statusMutex.Unlock()
 
-	// Check context again before updating state machine
 	if ctx.Err() != nil {
 		log.Printf("Context canceled before updating node status in state machine: %v", ctx.Err())
 		return
 	}
 
 	// Update node status in state machine if needed
-	c.updateNodeStatusInStateMachine(ctx, nodeName)
+	s.updateNodeStatusInStateMachine(ctx, nodeName)
 }
 
 // updateNodeStatusInStateMachine updates status in the state machine based on metrics state
-func (c *DefaultMetricsComponent) updateNodeStatusInStateMachine(ctx context.Context, nodeName string) {
-	// Check for context cancellation at the beginning
+func (s *DefaultMetricsStateTracker) updateNodeStatusInStateMachine(ctx context.Context, nodeName string) {
 	if ctx.Err() != nil {
 		log.Printf("Skipping state machine update due to context cancellation: %v", ctx.Err())
 		return
 	}
 
-	c.statusMutex.RLock()
-	status := c.nodeStatus[nodeName]
-	c.statusMutex.RUnlock()
+	s.statusMutex.RLock()
+	status := s.nodeStatus[nodeName]
+	s.statusMutex.RUnlock()
 
-	currentStatus, err := c.stateMachine.GetStatus(ctx, nodeName)
+	currentStatus, err := s.stateMachine.GetStatus(ctx, nodeName)
 	if err != nil {
 		log.Printf("Failed to get current status for node %s: %v", nodeName, err)
 		return
@@ -256,7 +459,6 @@ func (c *DefaultMetricsComponent) updateNodeStatusInStateMachine(ctx context.Con
 		return
 	}
 
-	// Check context again before proceeding
 	if ctx.Err() != nil {
 		log.Printf("Context canceled during state determination: %v", ctx.Err())
 		return
@@ -280,120 +482,28 @@ func (c *DefaultMetricsComponent) updateNodeStatusInStateMachine(ctx context.Con
 			"message": status.Message,
 		}
 
-		// Check context again before making state change
 		if ctx.Err() != nil {
 			log.Printf("Context canceled before handling state event: %v", ctx.Err())
 			return
 		}
 
-		if err := c.stateMachine.HandleEvent(ctx, nodeName, domain.EventInitialize, data); err != nil {
+		if err := s.stateMachine.HandleEvent(ctx, nodeName, domain.EventInitialize, data); err != nil {
 			log.Printf("Failed to update node state based on metrics state: %v", err)
 		}
 	}
 }
 
-// GetMetricsState returns the current metrics collection state for a node
-func (c *DefaultMetricsComponent) GetMetricsState(nodeName string) MetricsState {
-	c.statusMutex.RLock()
-	defer c.statusMutex.RUnlock()
+// NewMetricsComponent creates a new metrics component using the new architecture
+func NewMetricsComponent(
+	metricsService domainMetric.Provider,
+	stateMachine domain.StateMachine,
+	config *app.MetricsConfig,
+) MetricsComponent {
+	// Create components
+	stateTracker := NewMetricsStateTracker(metricsService, stateMachine)
+	collector := NewMetricsCollector(metricsService)
+	analyzer := NewMetricsAnalyzer(metricsService, config)
 
-	status, exists := c.nodeStatus[nodeName]
-	if !exists {
-		return MetricsInitializing
-	}
-	return status.State
-}
-
-// GetNodeCPUMetrics returns the current and window average CPU metrics for a node
-func (c *DefaultMetricsComponent) GetNodeCPUMetrics(nodeName string) (float64, float64, error) {
-	// Register node status if not already registered
-	c.statusMutex.RLock()
-	_, exists := c.nodeStatus[nodeName]
-	c.statusMutex.RUnlock()
-
-	if !exists {
-		c.statusMutex.Lock()
-		c.nodeStatus[nodeName] = &NodeMetricsStatus{
-			State:       MetricsInitializing,
-			LastUpdated: time.Now(),
-			Message:     "Initializing metrics collection",
-		}
-		c.statusMutex.Unlock()
-	}
-
-	// Get current CPU from metrics service
-	currentCPU, err := c.metricsService.GetNodeCPUUsage(nodeName)
-	if err != nil {
-		if common.IsNodeNotFoundError(err) {
-			log.Printf("Node %s registered but metrics not yet available - using default values", nodeName)
-			return 0.0, 0.0, nil
-		}
-		return 0, 0, fmt.Errorf("failed to get current CPU usage: %w", err)
-	}
-
-	// Get window average from metrics service
-	windowAvg, err := c.metricsService.GetWindowAverageCPU(nodeName)
-	if err != nil {
-		log.Printf("Window average not yet available for node %s, using current value", nodeName)
-		windowAvg = currentCPU
-	}
-
-	return currentCPU, windowAvg, nil
-}
-
-// IsWindowReadyForScaling checks if the window is mature enough for scaling decisions
-func (c *DefaultMetricsComponent) IsWindowReadyForScaling(ctx context.Context, nodeName string) (bool, error) {
-	// Check for context cancellation
-	if ctx.Err() != nil {
-		return false, ctx.Err()
-	}
-
-	// Check metrics state first
-	metricsState := c.GetMetricsState(nodeName)
-	if metricsState != MetricsReady {
-		return false, nil
-	}
-
-	// For nodes in READY state, verify window data
-	window, exists := c.metricsService.GetWindow(nodeName)
-	if !exists {
-		return false, nil
-	}
-
-	values := window.GetWindowValues()
-	return len(values) >= window.MinSamples, nil
-}
-
-// CheckCPUThresholdExceeded determines if a node's CPU utilization exceeds the threshold
-func (c *DefaultMetricsComponent) CheckCPUThresholdExceeded(ctx context.Context, nodeName string) (bool, float64, float64, error) {
-	// Check for context cancellation
-	if ctx.Err() != nil {
-		return false, 0, 0, ctx.Err()
-	}
-
-	// Get metrics state first
-	metricsState := c.GetMetricsState(nodeName)
-	if metricsState != MetricsReady {
-		currentCPU, windowAvg, _ := c.GetNodeCPUMetrics(nodeName)
-		return false, currentCPU, windowAvg, nil
-	}
-
-	// Get current and window average CPU metrics
-	currentCPU, windowAvg, err := c.GetNodeCPUMetrics(nodeName)
-	if err != nil {
-		if ctx.Err() != nil {
-			return false, 0, 0, ctx.Err()
-		}
-		return false, 0, 0, fmt.Errorf("failed to get CPU metrics: %w", err)
-	}
-
-	// Check if window average exceeds threshold
-	thresholdExceeded := windowAvg > c.config.ScaleTrigger
-
-	if thresholdExceeded {
-		log.Printf("CPU threshold exceeded for node %s: %.2f%% > %.2f%%",
-			nodeName, windowAvg, c.config.ScaleTrigger)
-	}
-
-	return thresholdExceeded, currentCPU, windowAvg, nil
+	// Create manager that implements MetricsComponent
+	return NewMetricsManager(collector, analyzer, stateTracker, stateMachine, metricsService)
 }

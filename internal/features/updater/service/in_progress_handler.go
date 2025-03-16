@@ -21,6 +21,11 @@ func newInProgressHandler(resourceFactory *resource.Factory) domain.StateHandler
 
 // Handle processes events for the InProgressVmSpecUp state
 func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPlaneStatus, event domain.Event, data map[string]interface{}) (*domain.ControlPlaneStatus, error) {
+	// Check for context cancellation at the beginning
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	// Create a copy of the status to work with
 	newStatus := *status
 
@@ -28,6 +33,11 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPl
 
 	switch event {
 	case domain.EventSpecUpRequested:
+		// Check for context cancellation
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		log.Printf("IN_PROGRESS HANDLER: Spec up requested for node %s", status.NodeName)
 		// Update status to indicate spec up was requested successfully
 		newStatus.SpecUpRequested = true
@@ -44,6 +54,11 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPl
 		return &newStatus, nil
 
 	case domain.EventSpecUpCompleted:
+		// Check for context cancellation
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		log.Printf("IN_PROGRESS HANDLER: Spec up completed for node %s, waiting for health check", status.NodeName)
 		// Backend says spec up is complete, now waiting for health check
 		newStatus.SpecUpCompleted = true
@@ -51,6 +66,11 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPl
 		return &newStatus, nil
 
 	case domain.EventHealthCheckPassed:
+		// Check for context cancellation
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		log.Printf("IN_PROGRESS HANDLER: Health check passed for node %s, transitioning to CompletedVmSpecUp", status.NodeName)
 		// When health check passes, transition to completed state
 		newStatus.CurrentState = domain.StateCompletedVmSpecUp
@@ -59,6 +79,11 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPl
 		return &newStatus, nil
 
 	case domain.EventHealthCheckFailed:
+		// Check for context cancellation
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		log.Printf("IN_PROGRESS HANDLER: Health check failed for node %s, transitioning to FailedVmSpecUp", status.NodeName)
 		// When health check fails, transition to failed state
 		newStatus.CurrentState = domain.StateFailedVmSpecUp
@@ -67,6 +92,11 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPl
 		return &newStatus, nil
 
 	case domain.EventSpecUpFailed:
+		// Check for context cancellation
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		log.Printf("IN_PROGRESS HANDLER: Spec up failed for node %s, transitioning to FailedVmSpecUp", status.NodeName)
 		// When spec up process fails for any reason
 		newStatus.CurrentState = domain.StateFailedVmSpecUp
@@ -82,7 +112,17 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPl
 
 		return &newStatus, nil
 	default:
+		// Check for context cancellation
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
 		log.Printf("IN_PROGRESS HANDLER: Unhandled event %s for node %s, no state change", event, status.NodeName)
+	}
+
+	// Final context check before returning the default response
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 
 	// Default: no state change for other events
@@ -120,6 +160,11 @@ func (h *inProgressHandler) OnEnter(ctx context.Context, status *domain.ControlP
 
 // OnExit is called when exiting the InProgressVmSpecUp state
 func (h *inProgressHandler) OnExit(ctx context.Context, status *domain.ControlPlaneStatus) (*domain.ControlPlaneStatus, error) {
+	// Check for context cancellation
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	// Nothing special to do on exit
 	return status, nil
 }

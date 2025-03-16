@@ -8,6 +8,7 @@ import (
 	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
 	"log"
+	"math"
 	"sync"
 	"time"
 )
@@ -297,8 +298,9 @@ func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, sta
 	// Convert domain status to CRD-compatible format
 	statusData := map[string]interface{}{
 		"controlPlaneNodeName": nodeName,
-		"cpuWinUsage":          fmt.Sprintf("%.1f", status.WindowAverageUtilization),
-		"coolDown":             status.CurrentState == domain.StateCoolDown,
+		"cpuWinUsage":          math.Round(status.WindowAverageUtilization*10) / 10,
+
+		"coolDown": status.CurrentState == domain.StateCoolDown,
 		//"updateStatus":         string(status.CurrentState),
 		"message":        status.Message,
 		"lastUpdateTime": status.LastTransitionTime.Format(time.RFC3339),

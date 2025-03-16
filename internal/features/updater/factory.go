@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"k2p-updater/internal/features/updater/component/backend"
-	coordination2 "k2p-updater/internal/features/updater/component/coordination"
+	"k2p-updater/internal/features/updater/component/coordination"
 	"k2p-updater/internal/features/updater/component/health"
 	"k2p-updater/internal/features/updater/component/metrics"
 	"k2p-updater/internal/features/updater/component/recovery"
@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"k2p-updater/cmd/app"
-	exporterDomain "k2p-updater/internal/features/exporter/domain"
-	metricDomain "k2p-updater/internal/features/metric/domain"
+	domainExporter "k2p-updater/internal/features/exporter/domain"
+	domainMetric "k2p-updater/internal/features/metric/domain"
 	"k2p-updater/internal/features/updater/domain/interfaces"
 	"k2p-updater/internal/features/updater/domain/models"
 	"k2p-updater/internal/features/updater/service"
@@ -28,8 +28,8 @@ import (
 func NewProvider(
 	ctx context.Context,
 	config *app.Config,
-	metricsService metricDomain.Provider,
-	exporterService exporterDomain.Provider,
+	metricsService domainMetric.Provider,
+	exporterService domainExporter.Provider,
 	resourceFactory *resource.Factory,
 	kubeClient kubernetes.Interface,
 	// Optional dependencies for testing
@@ -90,12 +90,12 @@ func NewProvider(
 
 	nodeDiscoverer := opts.nodeDiscoverer
 	if nodeDiscoverer == nil {
-		nodeDiscoverer = coordination2.NewNodeDiscoverer(kubeClient, config.Kubernetes.Namespace)
+		nodeDiscoverer = coordination.NewNodeDiscoverer(kubeClient, config.Kubernetes.Namespace)
 	}
 
 	coordinator := opts.coordinator
 	if coordinator == nil {
-		coordinator = coordination2.NewCoordinationManager(stateMachine)
+		coordinator = coordination.NewCoordinationManager(stateMachine)
 	}
 
 	recoveryManager := opts.recoveryManager

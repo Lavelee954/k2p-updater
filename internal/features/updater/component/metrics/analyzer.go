@@ -3,7 +3,7 @@ package metrics
 import (
 	"context"
 	"k2p-updater/cmd/app"
-	domainMetric "k2p-updater/internal/features/metric/domain"
+	"k2p-updater/internal/features/metric/domain"
 )
 
 // Analyzer is responsible for analyzing metrics data
@@ -14,13 +14,13 @@ type Analyzer interface {
 
 // DefaultMetricsAnalyzer implements the Analyzer interface
 type DefaultMetricsAnalyzer struct {
-	metricsService domainMetric.Provider
+	metricsService domain.Provider
 	config         *app.MetricsConfig
 }
 
 // NewMetricsAnalyzer creates a new metrics analyzer
 func NewMetricsAnalyzer(
-	metricsService domainMetric.Provider,
+	metricsService domain.Provider,
 	config *app.MetricsConfig,
 ) *DefaultMetricsAnalyzer {
 	return &DefaultMetricsAnalyzer{

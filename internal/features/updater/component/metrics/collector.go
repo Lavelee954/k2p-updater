@@ -3,7 +3,7 @@ package metrics
 import (
 	"fmt"
 	"k2p-updater/internal/common"
-	domainMetric "k2p-updater/internal/features/metric/domain"
+	"k2p-updater/internal/features/metric/domain"
 	"log"
 )
 
@@ -14,11 +14,11 @@ type Collector interface {
 
 // DefaultMetricsCollector implements the Collector interface
 type DefaultMetricsCollector struct {
-	metricsService domainMetric.Provider
+	metricsService domain.Provider
 }
 
 // NewMetricsCollector creates a new metrics collector
-func NewMetricsCollector(metricsService domainMetric.Provider) *DefaultMetricsCollector {
+func NewMetricsCollector(metricsService domain.Provider) *DefaultMetricsCollector {
 	return &DefaultMetricsCollector{
 		metricsService: metricsService,
 	}

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"log"
 
-	domainMetric "k2p-updater/internal/features/metric/domain"
+	"k2p-updater/internal/features/metric/domain"
 	"k2p-updater/internal/features/updater/domain/interfaces"
 	"k2p-updater/internal/features/updater/domain/models"
 )
@@ -16,7 +16,7 @@ type Manager struct {
 	analyzer       Analyzer
 	stateTracker   StateTracker
 	stateUpdater   interfaces.StateUpdater
-	metricsService domainMetric.Provider
+	metricsService domain.Provider
 }
 
 // NewMetricsManager creates a new metrics manager
@@ -25,7 +25,7 @@ func NewMetricsManager(
 	analyzer Analyzer,
 	stateTracker StateTracker,
 	stateUpdater interfaces.StateUpdater,
-	metricsService domainMetric.Provider,
+	metricsService domain.Provider,
 ) *Manager {
 	return &Manager{
 		collector:      collector,

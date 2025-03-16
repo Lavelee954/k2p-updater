@@ -3,7 +3,7 @@ package metrics
 import (
 	"context"
 	"k2p-updater/cmd/app"
-	domainMetric "k2p-updater/internal/features/metric/domain"
+	"k2p-updater/internal/features/metric/domain"
 	"k2p-updater/internal/features/updater/domain/interfaces"
 	"k2p-updater/internal/features/updater/domain/models"
 )
@@ -28,7 +28,7 @@ type Component interface {
 
 // NewMetricsComponent creates a fully configured metrics component with all dependencies
 func NewMetricsComponent(
-	metricsService domainMetric.Provider,
+	metricsService domain.Provider,
 	stateUpdater interfaces.StateUpdater,
 	config *app.MetricsConfig,
 ) Component {
@@ -49,7 +49,7 @@ func NewMetricsComponent(
 
 // WithCustomCollector allows replacing the default collector
 func WithCustomCollector(
-	metricsService domainMetric.Provider,
+	metricsService domain.Provider,
 	stateUpdater interfaces.StateUpdater,
 	config *app.MetricsConfig,
 	customCollector Collector,
@@ -68,7 +68,7 @@ func WithCustomCollector(
 
 // WithCustomAnalyzer allows replacing the default analyzer
 func WithCustomAnalyzer(
-	metricsService domainMetric.Provider,
+	metricsService domain.Provider,
 	stateUpdater interfaces.StateUpdater,
 	config *app.MetricsConfig,
 	customAnalyzer Analyzer,
@@ -87,7 +87,7 @@ func WithCustomAnalyzer(
 
 // WithCustomStateTracker allows replacing the default state tracker
 func WithCustomStateTracker(
-	metricsService domainMetric.Provider,
+	metricsService domain.Provider,
 	stateUpdater interfaces.StateUpdater,
 	config *app.MetricsConfig,
 	customStateTracker StateTracker,

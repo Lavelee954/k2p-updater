@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	domainMetric "k2p-updater/internal/features/metric/domain"
+	"k2p-updater/internal/features/metric/domain"
 	"k2p-updater/internal/features/updater/domain/interfaces"
 	"k2p-updater/internal/features/updater/domain/models"
 )
@@ -31,7 +31,7 @@ type StateTracker interface {
 
 // DefaultMetricsStateTracker implements the StateTracker interface
 type DefaultMetricsStateTracker struct {
-	metricsService domainMetric.Provider
+	metricsService domain.Provider
 	stateUpdater   interfaces.StateUpdater
 	nodeStatus     map[string]*NodeMetricsStatus
 	statusMutex    sync.RWMutex
@@ -39,7 +39,7 @@ type DefaultMetricsStateTracker struct {
 
 // NewMetricsStateTracker creates a new metrics state tracker
 func NewMetricsStateTracker(
-	metricsService domainMetric.Provider,
+	metricsService domain.Provider,
 	stateUpdater interfaces.StateUpdater,
 ) *DefaultMetricsStateTracker {
 	return &DefaultMetricsStateTracker{

@@ -1,4 +1,4 @@
-package service
+package updater
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"k2p-updater/pkg/resource"
 )
 
-// ResourceFactoryAdapter adapts the pkg/resource.Factory to domain.ResourceFactory
+// ResourceFactoryAdapter adapts the pkg/resource.Factory to the domain.ResourceFactory interface
 type ResourceFactoryAdapter struct {
 	factory *resource.Factory
 }
@@ -33,7 +33,7 @@ func (r *ResourceFactoryAdapter) Status() domain.StatusUpdater {
 	}
 }
 
-// EventRecorderAdapter adapts the pkg/resource.Event to domain.EventRecorder
+// EventRecorderAdapter adapts the pkg/resource.Event to the domain.EventRecorder interface
 type EventRecorderAdapter struct {
 	event resource.Event
 }
@@ -48,7 +48,7 @@ func (e *EventRecorderAdapter) WarningRecordWithNode(ctx context.Context, compon
 	return e.event.WarningRecordWithNode(ctx, component, nodeName, reason, messageFmt, args...)
 }
 
-// StatusUpdaterAdapter adapts the pkg/resource.Status to domain.StatusUpdater
+// StatusUpdaterAdapter adapts the pkg/resource.Status to the domain.StatusUpdater interface
 type StatusUpdaterAdapter struct {
 	status resource.Status
 }

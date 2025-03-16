@@ -29,20 +29,30 @@ type stateMachine struct {
 }
 
 // NewStateMachine creates a new state machine
-func NewStateMachine(resourceFactory *resource.Factory) domain.StateMachine {
+func NewStateMachine(
+	resourceFactory *resource.Factory,
+	stateHandlers map[domain.State]domain.StateHandler,
+) domain.StateMachine {
 	sm := &stateMachine{
 		statusMap:       make(map[string]*domain.ControlPlaneStatus),
 		stateHandlers:   make(map[domain.State]domain.StateHandler),
 		resourceFactory: resourceFactory,
 	}
 
-	// Register state handlers
-	sm.stateHandlers[domain.StatePendingVmSpecUp] = newPendingHandler(resourceFactory)
-	sm.stateHandlers[domain.StateMonitoring] = newMonitoringHandler(resourceFactory)
-	sm.stateHandlers[domain.StateInProgressVmSpecUp] = newInProgressHandler(resourceFactory)
-	sm.stateHandlers[domain.StateCompletedVmSpecUp] = newCompletedHandler(resourceFactory)
-	sm.stateHandlers[domain.StateFailedVmSpecUp] = newFailedHandler(resourceFactory)
-	sm.stateHandlers[domain.StateCoolDown] = newCoolDownHandler(resourceFactory)
+	// Use provided handlers if available, otherwise create defaults
+	if stateHandlers != nil && len(stateHandlers) > 0 {
+		for state, handler := range stateHandlers {
+			sm.stateHandlers[state] = handler
+		}
+	} else {
+		// Register default state handlers
+		sm.stateHandlers[domain.StatePendingVmSpecUp] = newPendingHandler(resourceFactory)
+		sm.stateHandlers[domain.StateMonitoring] = newMonitoringHandler(resourceFactory)
+		sm.stateHandlers[domain.StateInProgressVmSpecUp] = newInProgressHandler(resourceFactory)
+		sm.stateHandlers[domain.StateCompletedVmSpecUp] = newCompletedHandler(resourceFactory)
+		sm.stateHandlers[domain.StateFailedVmSpecUp] = newFailedHandler(resourceFactory)
+		sm.stateHandlers[domain.StateCoolDown] = newCoolDownHandler(resourceFactory)
+	}
 
 	return sm
 }

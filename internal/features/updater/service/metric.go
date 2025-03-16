@@ -462,18 +462,42 @@ func (s *DefaultMetricsStateTracker) updateNodeStatusInStateMachine(ctx context.
 	}
 }
 
-// NewMetricsComponent creates a new metrics component using the new architecture
+// NewMetricsComponent creates a new metrics component with proper dependency injection
 func NewMetricsComponent(
 	metricsService domainMetric.Provider,
 	stateUpdater domainUpdater.StateUpdater,
 	config *app.MetricsConfig,
+	collector MetricsCollector,
+	analyzer MetricsAnalyzer,
+	stateTracker MetricsStateTracker,
 ) MetricsComponent {
-	// Create components
-	stateTracker := NewMetricsStateTracker(metricsService, stateUpdater)
-	collector := NewMetricsCollector(metricsService)
-	analyzer := NewMetricsAnalyzer(metricsService, config)
+	// Use provided dependencies or create default ones
+	if collector == nil {
+		collector = NewMetricsCollector(metricsService)
+	}
+
+	if analyzer == nil {
+		analyzer = NewMetricsAnalyzer(metricsService, config)
+	}
+
+	if stateTracker == nil {
+		stateTracker = NewMetricsStateTracker(metricsService, stateUpdater)
+	}
 
 	// Create manager that implements MetricsComponent
+	return NewMetricsManager(collector, analyzer, stateTracker, stateUpdater, metricsService)
+}
+
+// NewMetricsComponentLegacy preserves backward compatibility
+func NewMetricsComponentLegacy(
+	metricsService domainMetric.Provider,
+	stateUpdater domainUpdater.StateUpdater,
+	config *app.MetricsConfig,
+) MetricsComponent {
+	collector := NewMetricsCollector(metricsService)
+	analyzer := NewMetricsAnalyzer(metricsService, config)
+	stateTracker := NewMetricsStateTracker(metricsService, stateUpdater)
+
 	return NewMetricsManager(collector, analyzer, stateTracker, stateUpdater, metricsService)
 }
 

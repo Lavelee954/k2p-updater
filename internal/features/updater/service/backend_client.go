@@ -53,13 +53,14 @@ func WithCircuitBreaker(threshold int, resetTimeout time.Duration) BackendClient
 }
 
 // NewBackendClient creates a new backend client with retry logic and circuit breaker
-func NewBackendClient(config *app.BackendConfig, options ...BackendClientOption) domain.BackendClient {
+func NewBackendClient(config *app.BackendConfig, httpClient *http.Client, options ...BackendClientOption) domain.BackendClient {
 	client := &BackendClient{
 		baseURL:          config.BaseURL,
 		apiKey:           config.APIKey,
 		timeout:          config.Timeout,
 		failureThreshold: 5,               // Default threshold
 		resetTimeout:     1 * time.Minute, // Default reset timeout
+		httpClient:       httpClient,
 	}
 
 	// Apply options
@@ -67,8 +68,11 @@ func NewBackendClient(config *app.BackendConfig, options ...BackendClientOption)
 		option(client)
 	}
 
-	client.httpClient = &http.Client{
-		Timeout: client.timeout,
+	// If no HTTP client was provided, create a default one
+	if client.httpClient == nil {
+		client.httpClient = &http.Client{
+			Timeout: client.timeout,
+		}
 	}
 
 	return client

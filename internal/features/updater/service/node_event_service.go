@@ -221,9 +221,9 @@ func (s *NodeEventService) updateNodeStatusInCR(ctx context.Context, nodeName st
 		"controlPlaneNodeName": nodeName,
 		"cpuWinUsage":          status.WindowAverageUtilization,
 		"coolDown":             status.CurrentState == domain.StateCoolDown,
-		"updateStatus":         string(status.CurrentState),
-		"message":              status.Message,
-		"lastUpdateTime":       time.Now().Format(time.RFC3339),
+		//"updateStatus":         string(status.CurrentState),
+		"message":        status.Message,
+		"lastUpdateTime": time.Now().Format(time.RFC3339),
 	}
 
 	log.Printf("Updating CR status for node %s with CPU: %.2f%%, window: %.2f%%",

@@ -665,7 +665,7 @@ func (s *UpdaterService) handleCooldownEnded(ctx context.Context, nodeName strin
 			ctx,
 			models.UpdateKey,
 			nodeName,
-			string(models.StateMonitoring),
+			string(models.StatePendingVmSpecUp),
 			"Node %s cooldown period ended, transitioning to monitoring state",
 			nodeName,
 		)

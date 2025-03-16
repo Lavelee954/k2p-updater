@@ -177,7 +177,7 @@ func (h *monitoringHandler) OnEnter(ctx context.Context, status *models.ControlP
 		ctx,
 		models.UpdateKey,
 		status.NodeName,
-		string(models.StateMonitoring),
+		string(models.StatePendingVmSpecUp),
 		"Node %s is now monitoring CPU utilization (current: %.2f%%, window avg: %.2f%%)",
 		status.NodeName,
 		status.CPUUtilization,

@@ -1,7 +1,6 @@
 package common
 
 import (
-	"context"
 	"errors"
 	"fmt"
 )
@@ -24,31 +23,6 @@ var (
 	ErrUnavailable = errors.New("service unavailable")
 )
 
-// IsNotFound checks if err is or wraps ErrNotFound
-func IsNotFound(err error) bool {
-	return errors.Is(err, ErrNotFound)
-}
-
-// IsInvalidInput checks if err is or wraps ErrInvalidInput
-func IsInvalidInput(err error) bool {
-	return errors.Is(err, ErrInvalidInput)
-}
-
-// IsTimeout checks if err is or wraps ErrTimeout
-func IsTimeout(err error) bool {
-	return errors.Is(err, ErrTimeout)
-}
-
-// IsNotInitialized checks if err is or wraps ErrNotInitialized
-func IsNotInitialized(err error) bool {
-	return errors.Is(err, ErrNotInitialized)
-}
-
-// IsUnavailable checks if err is or wraps ErrUnavailable
-func IsUnavailable(err error) bool {
-	return errors.Is(err, ErrUnavailable)
-}
-
 // NotFoundError returns a wrapped not found error with context
 func NotFoundError(format string, args ...interface{}) error {
 	return fmt.Errorf("%s: %w", fmt.Sprintf(format, args...), ErrNotFound)
@@ -57,11 +31,6 @@ func NotFoundError(format string, args ...interface{}) error {
 // InvalidInputError returns a wrapped invalid input error with context
 func InvalidInputError(format string, args ...interface{}) error {
 	return fmt.Errorf("%s: %w", fmt.Sprintf(format, args...), ErrInvalidInput)
-}
-
-// TimeoutError returns a wrapped timeout error with context
-func TimeoutError(format string, args ...interface{}) error {
-	return fmt.Errorf("%s: %w", fmt.Sprintf(format, args...), ErrTimeout)
 }
 
 // NotInitializedError returns a wrapped not initialized error with context
@@ -132,13 +101,4 @@ func IsNodeNotFoundError(err error) bool {
 	var errNodeNotFound ErrNodeNotFound
 	ok := errors.As(err, &errNodeNotFound)
 	return ok
-}
-
-// CheckContextAndExecute checks context before executing a function and handles context errors
-func CheckContextAndExecute(ctx context.Context, op string, fn func() error) error {
-	if err := HandleContextError(ctx, op); err != nil {
-		return err
-	}
-
-	return fn()
 }

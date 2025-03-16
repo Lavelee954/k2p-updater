@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 )
 
 // HandleContextError checks for context cancellation and wraps the error with a message
@@ -38,29 +37,6 @@ func WrapError(err error, message string) error {
 	}
 	return fmt.Errorf("%s: %v", message, err)
 }
-
-// WithTimeout runs a function with a timeout and returns its result or a timeout error
-func WithTimeout(ctx context.Context, timeout time.Duration, operation func(context.Context) error) error {
-	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	done := make(chan error, 1)
-	go func() {
-		done <- operation(timeoutCtx)
-	}()
-
-	select {
-	case err := <-done:
-		return err
-	case <-timeoutCtx.Done():
-		if timeoutCtx.Err() == context.DeadlineExceeded {
-			return fmt.Errorf("operation timed out after %v", timeout)
-		}
-		return timeoutCtx.Err()
-	}
-}
-
-// context_utils.go
 
 // ContextError wraps context cancellation errors
 type ContextError struct {

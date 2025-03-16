@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"k2p-updater/cmd/app"
-	metricDomain "k2p-updater/internal/features/metric/domain"
-	updaterDomain "k2p-updater/internal/features/updater/domain"
+	domainMetric "k2p-updater/internal/features/metric/domain"
+	domainUpdater "k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
 	"log"
 	"strings"
@@ -18,11 +18,11 @@ import (
 
 // UpdaterService implements the updater.Provider interface
 type UpdaterService struct {
-	config           updaterDomain.UpdaterConfig
-	stateMachine     updaterDomain.StateMachine
-	metricsService   metricDomain.Provider
-	backendClient    updaterDomain.BackendClient
-	healthVerifier   updaterDomain.HealthVerifier
+	config           domainUpdater.UpdaterConfig
+	stateMachine     domainUpdater.StateMachine
+	metricsService   domainMetric.Provider
+	backendClient    domainUpdater.BackendClient
+	healthVerifier   domainUpdater.HealthVerifier
 	resourceFactory  *resource.Factory
 	nodeEventService *NodeEventService
 
@@ -44,14 +44,14 @@ type UpdaterService struct {
 // NewUpdaterService creates a new updater service
 func NewUpdaterService(
 	config *app.UpdaterConfig,
-	metricsService metricDomain.Provider,
-	backendClient updaterDomain.BackendClient,
-	healthVerifier updaterDomain.HealthVerifier,
+	metricsService domainMetric.Provider,
+	backendClient domainUpdater.BackendClient,
+	healthVerifier domainUpdater.HealthVerifier,
 	resourceFactory *resource.Factory,
 	kubeClient kubernetes.Interface,
-) updaterDomain.Provider {
+) domainUpdater.Provider {
 	// Convert app config to domain config
-	domainConfig := updaterDomain.UpdaterConfig{
+	domainConfig := domainUpdater.UpdaterConfig{
 		ScaleThreshold:         config.ScaleThreshold,
 		ScaleUpStep:            config.ScaleUpStep,
 		CooldownPeriod:         config.CooldownPeriod,
@@ -118,9 +118,9 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 		// Add startup event
 		startupEvent := s.resourceFactory.Event().NormalRecordWithNode(
 			ctx,
-			updaterDomain.UpdateKey,
-			updaterDomain.ResourceName,
-			string(updaterDomain.StatePendingVmSpecUp),
+			domainUpdater.UpdateKey,
+			domainUpdater.ResourceName,
+			string(domainUpdater.StatePendingVmSpecUp),
 			"K2P-Updater service starting with %d control plane nodes configured",
 			len(s.nodes),
 		)
@@ -149,9 +149,9 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 		if len(s.nodes) > 0 {
 			nodesDiscoveredEvent := s.resourceFactory.Event().NormalRecordWithNode(
 				ctx,
-				updaterDomain.UpdateKey,
-				updaterDomain.ResourceName,
-				string(updaterDomain.StatePendingVmSpecUp),
+				domainUpdater.UpdateKey,
+				domainUpdater.ResourceName,
+				string(domainUpdater.StatePendingVmSpecUp),
 				"Discovered %d control plane nodes: %s",
 				len(s.nodes),
 				strings.Join(s.nodes, ", "),
@@ -233,7 +233,7 @@ func (s *UpdaterService) Stop() {
 }
 
 // GetStateMachine returns the state machine instance
-func (s *UpdaterService) GetStateMachine() updaterDomain.StateMachine {
+func (s *UpdaterService) GetStateMachine() domainUpdater.StateMachine {
 	return s.stateMachine
 }
 
@@ -246,8 +246,8 @@ func (s *UpdaterService) RequestSpecUp(ctx context.Context, nodeName string) err
 	}
 
 	// Only allow spec up from appropriate states
-	if status.CurrentState != updaterDomain.StateInProgressVmSpecUp &&
-		status.CurrentState != updaterDomain.StateMonitoring {
+	if status.CurrentState != domainUpdater.StateInProgressVmSpecUp &&
+		status.CurrentState != domainUpdater.StateMonitoring {
 		return fmt.Errorf("node %s is in %s state, cannot request spec up",
 			nodeName, status.CurrentState)
 	}
@@ -265,7 +265,7 @@ func (s *UpdaterService) RequestSpecUp(ctx context.Context, nodeName string) err
 		data := map[string]interface{}{
 			"error": err.Error(),
 		}
-		if err2 := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventSpecUpFailed, data); err2 != nil {
+		if err2 := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventSpecUpFailed, data); err2 != nil {
 			log.Printf("Failed to handle spec up failure event: %v", err2)
 		}
 		return fmt.Errorf("backend request failed: %w", err)
@@ -276,7 +276,7 @@ func (s *UpdaterService) RequestSpecUp(ctx context.Context, nodeName string) err
 		data := map[string]interface{}{
 			"error": "Backend returned unsuccessful response",
 		}
-		if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventSpecUpFailed, data); err != nil {
+		if err := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventSpecUpFailed, data); err != nil {
 			log.Printf("Failed to handle spec up failure event: %v", err)
 		}
 		return fmt.Errorf("backend returned unsuccessful response")
@@ -286,7 +286,7 @@ func (s *UpdaterService) RequestSpecUp(ctx context.Context, nodeName string) err
 	data := map[string]interface{}{
 		"cpuUtilization": currentCPU,
 	}
-	if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventSpecUpRequested, data); err != nil {
+	if err := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventSpecUpRequested, data); err != nil {
 		log.Printf("Failed to handle spec up requested event: %v", err)
 		return fmt.Errorf("failed to update state: %w", err)
 	}
@@ -303,7 +303,7 @@ func (s *UpdaterService) VerifySpecUpHealth(ctx context.Context, nodeName string
 	}
 
 	// Validate that we're in an appropriate state to check health
-	if status.CurrentState != updaterDomain.StateInProgressVmSpecUp {
+	if status.CurrentState != domainUpdater.StateInProgressVmSpecUp {
 		return false, fmt.Errorf("cannot verify health for node %s in %s state",
 			nodeName, status.CurrentState)
 	}
@@ -331,11 +331,11 @@ func (s *UpdaterService) VerifySpecUpHealth(ctx context.Context, nodeName string
 	}
 
 	if healthy {
-		if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventHealthCheckPassed, data); err != nil {
+		if err := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventHealthCheckPassed, data); err != nil {
 			log.Printf("Failed to handle health check passed event: %v", err)
 		}
 	} else {
-		if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventHealthCheckFailed, data); err != nil {
+		if err := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventHealthCheckFailed, data); err != nil {
 			log.Printf("Failed to handle health check failed event: %v", err)
 		}
 	}
@@ -357,8 +357,8 @@ func (s *UpdaterService) IsCooldownActive(ctx context.Context, nodeName string) 
 	}
 
 	// Check if in cooldown state or pending state
-	inCooldown := status.CurrentState == updaterDomain.StateCoolDown ||
-		status.CurrentState == updaterDomain.StatePendingVmSpecUp
+	inCooldown := status.CurrentState == domainUpdater.StateCoolDown ||
+		status.CurrentState == domainUpdater.StatePendingVmSpecUp
 
 	// Calculate remaining cooldown time
 	var remaining time.Duration
@@ -418,7 +418,7 @@ func (s *UpdaterService) initializeNode(ctx context.Context, nodeName string) er
 			// doesn't know about this node yet
 			if strings.Contains(err.Error(), "node not found") {
 				// Add node to metrics service if it implements the NodeRegistration interface
-				if registrar, ok := s.metricsService.(metricDomain.NodeRegistration); ok {
+				if registrar, ok := s.metricsService.(domainMetric.NodeRegistration); ok {
 					if registerErr := registrar.RegisterNode(ctx, nodeName); registerErr != nil {
 						log.Printf("Failed to register node %s in metrics service: %v", nodeName, registerErr)
 					} else {
@@ -430,9 +430,9 @@ func (s *UpdaterService) initializeNode(ctx context.Context, nodeName string) er
 	}
 
 	// Create initial status with CoolDown state explicitly
-	initialStatus := &updaterDomain.ControlPlaneStatus{
+	initialStatus := &domainUpdater.ControlPlaneStatus{
 		NodeName:                 nodeName,
-		CurrentState:             updaterDomain.StateCoolDown,
+		CurrentState:             domainUpdater.StateCoolDown,
 		LastTransitionTime:       time.Now(),
 		Message:                  fmt.Sprintf("Initial startup cooldown period for %.1f minutes", s.config.CooldownPeriod.Minutes()),
 		CPUUtilization:           currentCPU,
@@ -450,11 +450,11 @@ func (s *UpdaterService) initializeNode(ctx context.Context, nodeName string) er
 		"cpuUtilization":           currentCPU,
 		"windowAverageUtilization": windowAvg,
 		"coolDownEndTime":          cooldownEnd,
-		"initialState":             updaterDomain.StateCoolDown,
+		"initialState":             domainUpdater.StateCoolDown,
 	}
 
 	// Initialize the node in the state machine
-	if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventInitialize, data); err != nil {
+	if err := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventInitialize, data); err != nil {
 		return fmt.Errorf("failed to initialize node: %w", err)
 	}
 
@@ -581,22 +581,22 @@ func (s *UpdaterService) updateAllNodeStatus(ctx context.Context) {
 
 		// Update status based on current state
 		switch state {
-		case updaterDomain.StateMonitoring:
+		case domainUpdater.StateMonitoring:
 			log.Printf("Updating monitoring status for node %s", nodeName)
 			if ctx.Err() != nil {
 				log.Printf("Context canceled before updating monitoring status: %v", ctx.Err())
 				return
 			}
-			if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventMonitoringStatus, data); err != nil {
+			if err := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventMonitoringStatus, data); err != nil {
 				log.Printf("Failed to update monitoring status: %v", err)
 			}
-		case updaterDomain.StateCoolDown:
+		case domainUpdater.StateCoolDown:
 			log.Printf("Updating cooldown status for node %s", nodeName)
 			if ctx.Err() != nil {
 				log.Printf("Context canceled before updating cooldown status: %v", ctx.Err())
 				return
 			}
-			if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventCooldownStatus, data); err != nil {
+			if err := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventCooldownStatus, data); err != nil {
 				log.Printf("Failed to update cooldown status: %v", err)
 			}
 		default:
@@ -648,7 +648,7 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 		}
 
 		// For nodes in monitoring state, check CPU threshold
-		if state == updaterDomain.StateMonitoring {
+		if state == domainUpdater.StateMonitoring {
 			thresholdExceeded, currentCPU, windowAvg, err := s.metricsComponent.CheckCPUThresholdExceeded(ctx, nodeName)
 			if err != nil {
 				log.Printf("Failed to check CPU threshold for node %s: %v", nodeName, err)
@@ -667,7 +667,7 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 					log.Printf("Context canceled before handling threshold event: %v", ctx.Err())
 					return
 				}
-				if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventThresholdExceeded, data); err != nil {
+				if err := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventThresholdExceeded, data); err != nil {
 					log.Printf("Failed to handle threshold exceeded event: %v", err)
 				} else {
 					log.Printf("Node %s triggered for spec up (CPU: %.2f%%)", nodeName, windowAvg)
@@ -682,7 +682,7 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 					log.Printf("Context canceled before updating metrics: %v", ctx.Err())
 					return
 				}
-				if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventInitialize, data); err != nil {
+				if err := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventInitialize, data); err != nil {
 					log.Printf("Failed to update metrics: %v", err)
 				}
 			} else {
@@ -691,11 +691,11 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 					log.Printf("Context canceled before updating metrics: %v", ctx.Err())
 					return
 				}
-				if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventInitialize, data); err != nil {
+				if err := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventInitialize, data); err != nil {
 					log.Printf("Failed to update metrics: %v", err)
 				}
 			}
-		} else if state == updaterDomain.StatePendingVmSpecUp || state == updaterDomain.StateCoolDown {
+		} else if state == domainUpdater.StatePendingVmSpecUp || state == domainUpdater.StateCoolDown {
 			// For nodes in pending or cooldown state, just update their metrics
 			currentCPU, windowAvg, _ := s.metricsComponent.GetNodeCPUMetrics(nodeName)
 
@@ -708,7 +708,7 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 				log.Printf("Context canceled before updating metrics: %v", ctx.Err())
 				return
 			}
-			if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventInitialize, data); err != nil {
+			if err := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventInitialize, data); err != nil {
 				log.Printf("Failed to update metrics: %v", err)
 			}
 		}
@@ -792,7 +792,7 @@ func (s *UpdaterService) updateAllCooldowns(ctx context.Context) {
 		}
 
 		// Only update for nodes in cooldown state
-		if state != updaterDomain.StateCoolDown {
+		if state != domainUpdater.StateCoolDown {
 			continue
 		}
 
@@ -825,7 +825,7 @@ func (s *UpdaterService) updateAllCooldowns(ctx context.Context) {
 				log.Printf("Context canceled before handling cooldown ended event: %v", ctx.Err())
 				return
 			}
-			if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventCooldownEnded, data); err != nil {
+			if err := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventCooldownEnded, data); err != nil {
 				log.Printf("Failed to handle cooldown ended event: %v", err)
 			} else {
 				// Create a single event recording the transition
@@ -835,9 +835,9 @@ func (s *UpdaterService) updateAllCooldowns(ctx context.Context) {
 				}
 				s.resourceFactory.Event().NormalRecordWithNode(
 					ctx,
-					updaterDomain.UpdateKey,
+					domainUpdater.UpdateKey,
 					nodeName,
-					string(updaterDomain.StatePendingVmSpecUp),
+					string(domainUpdater.StatePendingVmSpecUp),
 					"Node %s cooldown period ended, transitioning to monitoring state",
 					nodeName,
 				)
@@ -861,7 +861,7 @@ func (s *UpdaterService) updateAllCooldowns(ctx context.Context) {
 					log.Printf("Context canceled before updating cooldown message: %v", ctx.Err())
 					return
 				}
-				if err := s.stateMachine.HandleEvent(ctx, nodeName, updaterDomain.EventCooldownStatus, data); err != nil {
+				if err := s.stateMachine.HandleEvent(ctx, nodeName, domainUpdater.EventCooldownStatus, data); err != nil {
 					log.Printf("Failed to update cooldown message: %v", err)
 				}
 			}

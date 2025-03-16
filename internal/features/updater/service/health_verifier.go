@@ -3,18 +3,18 @@ package service
 import (
 	"context"
 	"fmt"
-	exporterDomain "k2p-updater/internal/features/exporter/domain"
+	domainExporter "k2p-updater/internal/features/exporter/domain"
 	"k2p-updater/internal/features/updater/domain"
 	"time"
 )
 
 // HealthVerifier implements the domain.HealthVerifier interface
 type HealthVerifier struct {
-	exporterService exporterDomain.Provider
+	exporterService domainExporter.Provider
 }
 
 // NewHealthVerifier creates a new health verifier
-func NewHealthVerifier(exporterService exporterDomain.Provider) domain.HealthVerifier {
+func NewHealthVerifier(exporterService domainExporter.Provider) domain.HealthVerifier {
 	return &HealthVerifier{
 		exporterService: exporterService,
 	}
@@ -29,7 +29,7 @@ func (v *HealthVerifier) VerifyNodeHealth(ctx context.Context, nodeName string) 
 	}
 
 	// Check exporter status
-	if exporter.Status != exporterDomain.StatusRunning {
+	if exporter.Status != domainExporter.StatusRunning {
 		return false, fmt.Errorf("exporter for node %s is in %s state", nodeName, exporter.Status)
 	}
 

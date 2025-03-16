@@ -506,7 +506,8 @@ func (s *UpdaterService) monitoringLoop(ctx context.Context) {
 func (s *UpdaterService) cooldownLoop(ctx context.Context) {
 	log.Println("Starting cooldown loop")
 
-	cooldownTicker := time.NewTicker(s.config.CooldownUpdateInterval)
+	// Change to 1 minute interval to align with our CR update frequency
+	cooldownTicker := time.NewTicker(1 * time.Minute)
 	defer cooldownTicker.Stop()
 
 	for {

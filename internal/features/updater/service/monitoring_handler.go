@@ -23,7 +23,7 @@ func newMonitoringHandler(resourceFactory *resource.Factory) domain.StateHandler
 	return &monitoringHandler{
 		resourceFactory: resourceFactory,
 		lastEventTime:   make(map[string]time.Time),
-		eventInterval:   30 * time.Second, // Only create events every 30 seconds at most
+		eventInterval:   10 * time.Minute, // Changed to 10 minutes as required
 	}
 }
 
@@ -42,25 +42,6 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *domain.ControlPl
 		newStatus.Message = "CPU threshold exceeded, initiating VM spec up"
 
 		// Record CPU metrics
-		if data != nil {
-			if cpu, ok := data["cpuUtilization"].(float64); ok {
-				newStatus.CPUUtilization = cpu
-				log.Printf("MONITORING HANDLER: CPU utilization for node %s: %.2f%%", status.NodeName, cpu)
-			}
-			if windowAvg, ok := data["windowAverageUtilization"].(float64); ok {
-				newStatus.WindowAverageUtilization = windowAvg
-				log.Printf("MONITORING HANDLER: Window average for node %s: %.2f%%", status.NodeName, windowAvg)
-			}
-		}
-
-		return &newStatus, nil
-
-	case domain.EventInitialize:
-		log.Printf("MONITORING HANDLER: Initialize event for node %s, staying in Monitoring state", status.NodeName)
-		// Stay in Monitoring state, update metrics
-		newStatus.Message = "Monitoring CPU utilization"
-
-		// Update CPU metrics if available
 		if data != nil {
 			if cpu, ok := data["cpuUtilization"].(float64); ok {
 				newStatus.CPUUtilization = cpu
@@ -109,13 +90,13 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *domain.ControlPl
 
 		now := time.Now()
 		if !exists || now.Sub(lastTime) > h.eventInterval {
-			// Record the event in CR message
+			// Record the periodic monitoring event
 			h.resourceFactory.Event().NormalRecordWithNode(
 				ctx,
 				"updater",
 				status.NodeName,
-				string(domain.StatePendingVmSpecUp),
-				"Node %s CPU metrics: current %.2f%%, window avg %.2f%%",
+				"PeriodicMonitoring",
+				"Node %s periodic monitoring report (10min): CPU current %.2f%%, window avg %.2f%%",
 				status.NodeName,
 				newStatus.CPUUtilization,
 				newStatus.WindowAverageUtilization,
@@ -125,6 +106,8 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *domain.ControlPl
 			h.eventMutex.Lock()
 			h.lastEventTime[status.NodeName] = now
 			h.eventMutex.Unlock()
+
+			log.Printf("Created 10-minute periodic monitoring event for node %s", status.NodeName)
 		}
 
 		return &newStatus, nil

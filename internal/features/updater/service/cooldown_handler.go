@@ -14,8 +14,10 @@ import (
 type coolDownHandler struct {
 	resourceFactory *resource.Factory
 	lastEventTime   map[string]time.Time
+	lastStatusTime  map[string]time.Time
 	eventMutex      sync.RWMutex
-	eventInterval   time.Duration // Minimum interval between events
+	eventInterval   time.Duration // Interval between events
+	statusInterval  time.Duration // Interval between CR status updates
 }
 
 // newCoolDownHandler creates a new handler for CoolDown state
@@ -23,7 +25,9 @@ func newCoolDownHandler(resourceFactory *resource.Factory) domain.StateHandler {
 	return &coolDownHandler{
 		resourceFactory: resourceFactory,
 		lastEventTime:   make(map[string]time.Time),
-		eventInterval:   30 * time.Second, // Only create events every 30 seconds at most
+		lastStatusTime:  make(map[string]time.Time),
+		eventInterval:   5 * time.Minute, // Event interval
+		statusInterval:  1 * time.Minute, // CR update interval set to 1 minute
 	}
 }
 
@@ -34,7 +38,28 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 
 	switch event {
 	case domain.EventInitialize:
-		// ... existing initialize code ...
+		// Stay in the same state, just update the message
+		if !newStatus.CoolDownEndTime.IsZero() {
+			remaining := time.Until(newStatus.CoolDownEndTime)
+			if remaining < 0 {
+				remaining = 0
+			}
+			newStatus.Message = fmt.Sprintf("In cooldown period, %.1f minutes remaining",
+				remaining.Minutes())
+		} else {
+			newStatus.Message = "In cooldown period"
+		}
+
+		// Update CPU metrics if available
+		if data != nil {
+			if cpu, ok := data["cpuUtilization"].(float64); ok {
+				newStatus.CPUUtilization = cpu
+			}
+			if windowAvg, ok := data["windowAverageUtilization"].(float64); ok {
+				newStatus.WindowAverageUtilization = windowAvg
+			}
+		}
+
 		return &newStatus, nil
 
 	case domain.EventCooldownStatus:
@@ -58,8 +83,24 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 			}
 		}
 
-		// Update the last transition time to ensure the CR message gets updated
-		newStatus.LastTransitionTime = time.Now()
+		// Check if it's time to update CR status (every 1 minute)
+		h.eventMutex.RLock()
+		lastStatusUpdate, statusExists := h.lastStatusTime[status.NodeName]
+		h.eventMutex.RUnlock()
+
+		now := time.Now()
+		if !statusExists || now.Sub(lastStatusUpdate) > h.statusInterval {
+			// Update the last transition time to ensure the CR message gets updated
+			newStatus.LastTransitionTime = now
+
+			// Update the last status update time
+			h.eventMutex.Lock()
+			h.lastStatusTime[status.NodeName] = now
+			h.eventMutex.Unlock()
+
+			log.Printf("Updating CR status for node %s (1-minute interval): %.1f minutes cooldown remaining",
+				status.NodeName, time.Until(newStatus.CoolDownEndTime).Minutes())
+		}
 
 		// Log the status update
 		log.Printf("COOLDOWN STATUS: Node %s cooldown status updated: %.1f minutes remaining, CPU: %.2f%%, Avg: %.2f%%",
@@ -67,32 +108,6 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 			time.Until(newStatus.CoolDownEndTime).Minutes(),
 			newStatus.CPUUtilization,
 			newStatus.WindowAverageUtilization)
-
-		// Check if enough time has passed since the last event
-		h.eventMutex.RLock()
-		lastTime, exists := h.lastEventTime[status.NodeName]
-		h.eventMutex.RUnlock()
-
-		now := time.Now()
-		if !exists || now.Sub(lastTime) > h.eventInterval {
-			// Create a status message event
-			h.resourceFactory.Event().NormalRecordWithNode(
-				ctx,
-				"updater",
-				status.NodeName,
-				string(domain.StatePendingVmSpecUp),
-				"Node %s cooldown update: %.1f minutes remaining, CPU: %.2f%%, Avg: %.2f%%",
-				status.NodeName,
-				time.Until(newStatus.CoolDownEndTime).Minutes(),
-				newStatus.CPUUtilization,
-				newStatus.WindowAverageUtilization,
-			)
-
-			// Update the last event time
-			h.eventMutex.Lock()
-			h.lastEventTime[status.NodeName] = now
-			h.eventMutex.Unlock()
-		}
 
 		return &newStatus, nil
 
@@ -114,6 +129,16 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 
 		log.Printf("COOLDOWN ENDED: Node %s transitioning directly from CoolDown to Monitoring",
 			status.NodeName)
+
+		// Create a state transition event
+		h.resourceFactory.Event().NormalRecordWithNode(
+			ctx,
+			"updater",
+			status.NodeName,
+			"StateTransition",
+			"Node %s state changed from CoolDown to Monitoring, cooldown period completed",
+			status.NodeName,
+		)
 
 		return &newStatus, nil
 	}

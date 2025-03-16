@@ -91,28 +91,28 @@ func (h *inProgressHandler) Handle(ctx context.Context, status *domain.ControlPl
 
 // OnEnter is called when entering the InProgressVmSpecUp state
 func (h *inProgressHandler) OnEnter(ctx context.Context, status *domain.ControlPlaneStatus) (*domain.ControlPlaneStatus, error) {
-	log.Printf("CRITICAL: OnEnter called for InProgressHandler - nodeName: %s", status.NodeName)
+	log.Printf("VM state transition: Node %s transitioning from %s to InProgressVmSpecUp",
+		status.NodeName, status.CurrentState)
 	newStatus := *status
 
-	// Record the event
-	log.Printf("CRITICAL: About to call resourceFactory.Event().NormalRecordWithNode")
+	// Record the VM state transition event
 	err := h.resourceFactory.Event().NormalRecordWithNode(
 		ctx,
 		"updater",
 		status.NodeName,
-		"InProgressVmSpecUp",
-		"Node %s started VM spec up process with CPU utilization at %.2f%% (window avg: %.2f%%)",
+		"VMStateTransition",
+		"Node %s VM state changed from %s to InProgressVmSpecUp with CPU utilization at %.2f%% (window avg: %.2f%%)",
 		status.NodeName,
+		status.CurrentState,
 		status.CPUUtilization,
 		status.WindowAverageUtilization,
 	)
-	log.Printf("CRITICAL: After calling NormalRecordWithNode, err: %v", err)
 
 	if err != nil {
-		log.Printf("Failed to record completion event for node %s: %v", status.NodeName, err)
+		log.Printf("Failed to record VM state transition event for node %s: %v", status.NodeName, err)
 		// Don't return error as we don't want to prevent state transition
 	} else {
-		log.Printf("Successfully recorded completion event for node %s", status.NodeName)
+		log.Printf("Successfully recorded VM state transition event for node %s", status.NodeName)
 	}
 
 	return &newStatus, nil

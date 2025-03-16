@@ -8,14 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"k2p-updater/cmd/app"
-	"k2p-updater/internal/common"
 	domainMetric "k2p-updater/internal/features/metric/domain"
 	domainUpdater "k2p-updater/internal/features/updater/domain"
 )
-
-// MetricsState represents the current state of metrics collection for a node
-type MetricsState string
 
 // NodeMetricsStatus tracks metrics collection status for a single node
 type NodeMetricsStatus struct {
@@ -26,26 +21,6 @@ type NodeMetricsStatus struct {
 	Message       string
 }
 
-// MetricsComponent handles all metrics-related operations
-type MetricsComponent interface {
-	GetNodeCPUMetrics(nodeName string) (float64, float64, error)
-	IsWindowReadyForScaling(ctx context.Context, nodeName string) (bool, error)
-	CheckCPUThresholdExceeded(ctx context.Context, nodeName string) (bool, float64, float64, error)
-	StartMonitoring(ctx context.Context) error
-	GetMetricsState(nodeName string) domainUpdater.MetricsState
-}
-
-// MetricsCollector is responsible for collecting metrics data
-type MetricsCollector interface {
-	GetNodeCPUMetrics(nodeName string) (float64, float64, error)
-}
-
-// MetricsAnalyzer is responsible for analyzing metrics data
-type MetricsAnalyzer interface {
-	IsWindowReadyForScaling(ctx context.Context, nodeName string) (bool, error)
-	CheckCPUThresholdExceeded(ctx context.Context, nodeName string, currentCPU, windowAvg float64) (bool, error)
-}
-
 // MetricsStateTracker is responsible for tracking metrics collection state
 type MetricsStateTracker interface {
 	GetMetricsState(nodeName string) domainUpdater.MetricsState
@@ -53,175 +28,10 @@ type MetricsStateTracker interface {
 	StartMonitoring(ctx context.Context) error
 }
 
-// MetricsManager orchestrates the metrics components
-type MetricsManager struct {
-	collector      MetricsCollector
-	analyzer       MetricsAnalyzer
-	stateTracker   MetricsStateTracker
-	stateUpdater   domainUpdater.StateUpdater
-	metricsService domainMetric.Provider
-}
-
-// NewMetricsManager creates a new metrics manager
-func NewMetricsManager(
-	collector MetricsCollector,
-	analyzer MetricsAnalyzer,
-	stateTracker MetricsStateTracker,
-	stateUpdater domainUpdater.StateUpdater,
-	metricsService domainMetric.Provider,
-) *MetricsManager {
-	return &MetricsManager{
-		collector:      collector,
-		analyzer:       analyzer,
-		stateTracker:   stateTracker,
-		stateUpdater:   stateUpdater,
-		metricsService: metricsService,
-	}
-}
-
-// GetNodeCPUMetrics returns the current and window average CPU metrics for a node
-func (m *MetricsManager) GetNodeCPUMetrics(nodeName string) (float64, float64, error) {
-	return m.collector.GetNodeCPUMetrics(nodeName)
-}
-
-// IsWindowReadyForScaling checks if the window is mature enough for scaling decisions
-func (m *MetricsManager) IsWindowReadyForScaling(ctx context.Context, nodeName string) (bool, error) {
-	if ctx.Err() != nil {
-		return false, ctx.Err()
-	}
-
-	metricsState := m.stateTracker.GetMetricsState(nodeName)
-	if metricsState != domainUpdater.MetricsReady {
-		return false, nil
-	}
-
-	return m.analyzer.IsWindowReadyForScaling(ctx, nodeName)
-}
-
-// CheckCPUThresholdExceeded determines if a node's CPU utilization exceeds the threshold
-func (m *MetricsManager) CheckCPUThresholdExceeded(ctx context.Context, nodeName string) (bool, float64, float64, error) {
-	if ctx.Err() != nil {
-		return false, 0, 0, ctx.Err()
-	}
-
-	metricsState := m.stateTracker.GetMetricsState(nodeName)
-	if metricsState != domainUpdater.MetricsReady {
-		currentCPU, windowAvg, _ := m.GetNodeCPUMetrics(nodeName)
-		return false, currentCPU, windowAvg, nil
-	}
-
-	currentCPU, windowAvg, err := m.GetNodeCPUMetrics(nodeName)
-	if err != nil {
-		if ctx.Err() != nil {
-			return false, 0, 0, ctx.Err()
-		}
-		return false, 0, 0, fmt.Errorf("failed to get CPU metrics: %w", err)
-	}
-
-	thresholdExceeded, err := m.analyzer.CheckCPUThresholdExceeded(ctx, nodeName, currentCPU, windowAvg)
-	if err != nil {
-		if ctx.Err() != nil {
-			return false, 0, 0, ctx.Err()
-		}
-		return false, currentCPU, windowAvg, err
-	}
-
-	if thresholdExceeded {
-		log.Printf("CPU threshold exceeded for node %s: %.2f%%", nodeName, windowAvg)
-	}
-
-	return thresholdExceeded, currentCPU, windowAvg, nil
-}
-
-// StartMonitoring begins background monitoring of metrics states
-func (m *MetricsManager) StartMonitoring(ctx context.Context) error {
-	return m.stateTracker.StartMonitoring(ctx)
-}
-
-// GetMetricsState returns the current metrics collection state for a node
-func (m *MetricsManager) GetMetricsState(nodeName string) domainUpdater.MetricsState {
-	return m.stateTracker.GetMetricsState(nodeName)
-}
-
-// DefaultMetricsCollector implements the MetricsCollector interface
-type DefaultMetricsCollector struct {
-	metricsService domainMetric.Provider
-}
-
-// NewMetricsCollector creates a new metrics collector
-func NewMetricsCollector(
-	metricsService domainMetric.Provider,
-) *DefaultMetricsCollector {
-	return &DefaultMetricsCollector{
-		metricsService: metricsService,
-	}
-}
-
-// GetNodeCPUMetrics returns the current and window average CPU metrics for a node
-func (c *DefaultMetricsCollector) GetNodeCPUMetrics(nodeName string) (float64, float64, error) {
-	currentCPU, err := c.metricsService.GetNodeCPUUsage(nodeName)
-	if err != nil {
-		if common.IsNodeNotFoundError(err) {
-			log.Printf("Node %s registered but metrics not yet available - using default values", nodeName)
-			return 0.0, 0.0, nil
-		}
-		return 0, 0, fmt.Errorf("failed to get current CPU usage: %w", err)
-	}
-
-	windowAvg, err := c.metricsService.GetWindowAverageCPU(nodeName)
-	if err != nil {
-		log.Printf("Window average not yet available for node %s, using current value", nodeName)
-		windowAvg = currentCPU
-	}
-
-	return currentCPU, windowAvg, nil
-}
-
-// DefaultMetricsAnalyzer implements the MetricsAnalyzer interface
-type DefaultMetricsAnalyzer struct {
-	metricsService domainMetric.Provider
-	config         *app.MetricsConfig
-}
-
-// NewMetricsAnalyzer creates a new metrics analyzer
-func NewMetricsAnalyzer(
-	metricsService domainMetric.Provider,
-	config *app.MetricsConfig,
-) *DefaultMetricsAnalyzer {
-	return &DefaultMetricsAnalyzer{
-		metricsService: metricsService,
-		config:         config,
-	}
-}
-
-// IsWindowReadyForScaling checks if the window is mature enough for scaling decisions
-func (a *DefaultMetricsAnalyzer) IsWindowReadyForScaling(ctx context.Context, nodeName string) (bool, error) {
-	if ctx.Err() != nil {
-		return false, ctx.Err()
-	}
-
-	window, exists := a.metricsService.GetWindow(nodeName)
-	if !exists {
-		return false, nil
-	}
-
-	values := window.GetWindowValues()
-	return len(values) >= window.MinSamples, nil
-}
-
-// CheckCPUThresholdExceeded determines if a node's CPU utilization exceeds the threshold
-func (a *DefaultMetricsAnalyzer) CheckCPUThresholdExceeded(ctx context.Context, nodeName string, currentCPU, windowAvg float64) (bool, error) {
-	if ctx.Err() != nil {
-		return false, ctx.Err()
-	}
-
-	return windowAvg > a.config.ScaleTrigger, nil
-}
-
 // DefaultMetricsStateTracker implements the MetricsStateTracker interface
 type DefaultMetricsStateTracker struct {
 	metricsService domainMetric.Provider
-	stateUpdater   domainUpdater.StateUpdater // Changed from stateMachine
+	stateUpdater   domainUpdater.StateUpdater
 	nodeStatus     map[string]*NodeMetricsStatus
 	statusMutex    sync.RWMutex
 }
@@ -252,7 +62,21 @@ func (s *DefaultMetricsStateTracker) GetMetricsState(nodeName string) domainUpda
 
 // UpdateMetricsState updates the metrics state for a node
 func (s *DefaultMetricsStateTracker) UpdateMetricsState(nodeName string, state domainUpdater.MetricsState, message string) {
-	// Method body remains the same
+	s.statusMutex.Lock()
+	defer s.statusMutex.Unlock()
+
+	status, exists := s.nodeStatus[nodeName]
+	if !exists {
+		status = &NodeMetricsStatus{
+			State:       domainUpdater.MetricsInitializing,
+			LastUpdated: time.Now(),
+		}
+		s.nodeStatus[nodeName] = status
+	}
+
+	status.State = state
+	status.Message = message
+	status.LastUpdated = time.Now()
 }
 
 // StartMonitoring begins background monitoring of metrics states
@@ -288,7 +112,6 @@ func (s *DefaultMetricsStateTracker) monitorNodesReadiness(ctx context.Context) 
 	}
 }
 
-// checkAllNodesMetricsReadiness verifies metrics readiness for all nodes
 func (s *DefaultMetricsStateTracker) checkAllNodesMetricsReadiness(ctx context.Context) error {
 	if ctx.Err() != nil {
 		log.Printf("Skipping metrics readiness check due to context cancellation: %v", ctx.Err())
@@ -461,45 +284,3 @@ func (s *DefaultMetricsStateTracker) updateNodeStatusInStateMachine(ctx context.
 		}
 	}
 }
-
-// NewMetricsComponent creates a new metrics component with proper dependency injection
-func NewMetricsComponent(
-	metricsService domainMetric.Provider,
-	stateUpdater domainUpdater.StateUpdater,
-	config *app.MetricsConfig,
-	collector MetricsCollector,
-	analyzer MetricsAnalyzer,
-	stateTracker MetricsStateTracker,
-) MetricsComponent {
-	// Use provided dependencies or create default ones
-	if collector == nil {
-		collector = NewMetricsCollector(metricsService)
-	}
-
-	if analyzer == nil {
-		analyzer = NewMetricsAnalyzer(metricsService, config)
-	}
-
-	if stateTracker == nil {
-		stateTracker = NewMetricsStateTracker(metricsService, stateUpdater)
-	}
-
-	// Create manager that implements MetricsComponent
-	return NewMetricsManager(collector, analyzer, stateTracker, stateUpdater, metricsService)
-}
-
-// NewMetricsComponentLegacy preserves backward compatibility
-func NewMetricsComponentLegacy(
-	metricsService domainMetric.Provider,
-	stateUpdater domainUpdater.StateUpdater,
-	config *app.MetricsConfig,
-) MetricsComponent {
-	collector := NewMetricsCollector(metricsService)
-	analyzer := NewMetricsAnalyzer(metricsService, config)
-	stateTracker := NewMetricsStateTracker(metricsService, stateUpdater)
-
-	return NewMetricsManager(collector, analyzer, stateTracker, stateUpdater, metricsService)
-}
-
-// Verify interface implementation
-var _ domainUpdater.MetricsProvider = (*MetricsManager)(nil)

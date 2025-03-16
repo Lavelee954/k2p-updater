@@ -71,7 +71,9 @@ func NewProvider(
 			CooldownPeriod: config.Updater.CooldownPeriod,
 			ScaleTrigger:   config.Updater.ScaleThreshold,
 		}
-		metricsComponent = service.NewMetricsComponentLegacy(
+
+		// Use the new factory method
+		metricsComponent = service.NewMetricsComponent(
 			metricsService,
 			stateMachine,
 			metricsConfig,

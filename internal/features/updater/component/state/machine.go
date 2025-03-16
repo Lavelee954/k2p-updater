@@ -2,9 +2,9 @@ package state
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"k2p-updater/internal/common"
+	"k2p-updater/internal/features/updater/component/queue"
 	"k2p-updater/internal/features/updater/domain/interfaces"
 	"k2p-updater/internal/features/updater/domain/models"
 	"k2p-updater/pkg/resource"
@@ -25,6 +25,9 @@ type stateMachine struct {
 	// resourceFactory is used to update the custom resource status
 	resourceFactory *resource.Factory
 
+	// updateQueue manages the queued operations
+	updateQueue *queue.UpdateQueue
+
 	// mu protects concurrent access to the status map
 	mu sync.RWMutex
 }
@@ -34,6 +37,7 @@ func NewStateMachine(
 	resourceFactory *resource.Factory,
 	stateHandlers map[models.State]interfaces.StateHandler,
 ) interfaces.StateMachine {
+	// Create state machine instance
 	sm := &stateMachine{
 		statusMap:       make(map[string]*models.ControlPlaneStatus),
 		stateHandlers:   make(map[models.State]interfaces.StateHandler),
@@ -46,24 +50,33 @@ func NewStateMachine(
 			sm.stateHandlers[state] = handler
 		}
 	} else {
-		// Register default state handlers - will be implemented in factory
+		// Register default state handlers
 		sm.stateHandlers = createDefaultStateHandlers(resourceFactory)
 	}
+
+	// Initialize the update queue *after* the state machine is fully defined
+	// We need to defer this initialization to avoid the circular dependency
+	// because the processor requires a fully initialized state machine
+	sm.initUpdateQueue()
 
 	return sm
 }
 
-// GetCurrentState returns the current state for a node
-func (sm *stateMachine) GetCurrentState(ctx context.Context, nodeName string) (models.State, error) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+// initUpdateQueue initializes the update queue with this state machine as processor
+func (sm *stateMachine) initUpdateQueue() {
+	// Create the update queue with this state machine as the processor
+	sm.updateQueue = queue.NewUpdateQueue(
+		// Use an adapter to satisfy the NodeProcessor interface
+		&nodeProcessorAdapter{sm: sm},
+		queue.WithMaxQueueSize(200),
+		queue.WithMaxRetries(3),
+		queue.WithProcessingDelay(50*time.Millisecond),
+	)
+}
 
-	status, exists := sm.statusMap[nodeName]
-	if !exists {
-		return "", common.NotFoundError("node %s not found in state machine", nodeName)
-	}
-
-	return status.CurrentState, nil
+// nodeProcessorAdapter adapts the state machine to the NodeProcessor interface
+type nodeProcessorAdapter struct {
+	sm *stateMachine
 }
 
 // HandleEvent processes an event and transitions to the next state if needed
@@ -102,8 +115,31 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 	return sm.executeStateTransition(ctx, transaction)
 }
 
+// GetCurrentState returns the current state for a node
+func (sm *stateMachine) GetCurrentState(ctx context.Context, nodeName string) (models.State, error) {
+	// Check context before accessing state
+	if err := common.CheckContext(ctx); err != nil {
+		return "", fmt.Errorf("context error before getting current state: %w", err)
+	}
+
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	status, exists := sm.statusMap[nodeName]
+	if !exists {
+		return "", common.NotFoundError("node %s not found in state machine", nodeName)
+	}
+
+	return status.CurrentState, nil
+}
+
 // GetStatus returns the current status for a node
 func (sm *stateMachine) GetStatus(ctx context.Context, nodeName string) (*models.ControlPlaneStatus, error) {
+	// Check context before accessing status
+	if err := common.CheckContext(ctx); err != nil {
+		return nil, fmt.Errorf("context error before getting status: %w", err)
+	}
+
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -119,6 +155,11 @@ func (sm *stateMachine) GetStatus(ctx context.Context, nodeName string) (*models
 
 // UpdateStatus updates the status for a node
 func (sm *stateMachine) UpdateStatus(ctx context.Context, nodeName string, status *models.ControlPlaneStatus) error {
+	// Check context before updating status
+	if err := common.CheckContext(ctx); err != nil {
+		return fmt.Errorf("context error before updating status: %w", err)
+	}
+
 	if status == nil {
 		return common.InvalidInputError("status cannot be nil")
 	}
@@ -133,51 +174,13 @@ func (sm *stateMachine) UpdateStatus(ctx context.Context, nodeName string, statu
 	return sm.updateCRStatus(ctx, nodeName, status)
 }
 
-// updateCRStatus updates the control plane status in the custom resource
-func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, status *models.ControlPlaneStatus) error {
-	// Check for context cancellation
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	// Log what we're trying to update
-	log.Printf("State machine updating CR status for node %s: state=%s, CPU=%.2f%%, window=%.2f%%",
-		nodeName, status.CurrentState, status.CPUUtilization, status.WindowAverageUtilization)
-
-	// Convert domain status to CRD-compatible format
-	statusData := map[string]interface{}{
-		"controlPlaneNodeName": nodeName,
-		"cpuWinUsage":          math.Round(status.WindowAverageUtilization*10) / 10,
-
-		"coolDown": status.CurrentState == models.StateCoolDown,
-		//"updateStatus":         string(status.CurrentState),
-		"message":        status.Message,
-		"lastUpdateTime": status.LastTransitionTime.Format(time.RFC3339),
-	}
-
-	// Use "k2pupdater-master" as the resource name (from the CR snippet we can see the name format)
-	err := sm.resourceFactory.Status().UpdateGenericWithNode(ctx, models.UpdateKey, models.ResourceName, statusData)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			log.Printf("Context canceled during CR status update: %v", err)
-			return err
-		}
-		log.Printf("Failed to update CR status for node %s: %v", nodeName, err)
-		return err
-	}
-
-	log.Printf("Successfully updated CR status for node %s via state machine", nodeName)
-	return nil
-}
-
-// createDefaultStateHandlers creates the default set of state handlers
-func createDefaultStateHandlers(resourceFactory *resource.Factory) map[models.State]interfaces.StateHandler {
-	// Just call the CreateStateHandlers function from factory.go
-	return CreateStateHandlers(resourceFactory)
-}
-
 // prepareTransaction reads current state and prepares the transaction
 func (sm *stateMachine) prepareTransaction(ctx context.Context, tx *stateTransaction) error {
+	// Check context before preparing transaction
+	if err := common.CheckContext(ctx); err != nil {
+		return fmt.Errorf("context error before preparing transaction: %w", err)
+	}
+
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
@@ -207,17 +210,23 @@ func (sm *stateMachine) prepareTransaction(ctx context.Context, tx *stateTransac
 	// Record initial state
 	tx.initialState = status.CurrentState
 
+	// Check context after preparing transaction
+	if err := common.CheckContext(ctx); err != nil {
+		return fmt.Errorf("context error after preparing transaction: %w", err)
+	}
+
 	return nil
 }
 
 // executeSimpleUpdate handles updates that don't change state
 func (sm *stateMachine) executeSimpleUpdate(ctx context.Context, tx *stateTransaction) error {
+	// Check context before executing update
+	if err := common.CheckContext(ctx); err != nil {
+		return fmt.Errorf("context error before executing simple update: %w", err)
+	}
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
 
 	// Get current state handler
 	handler, exists := sm.stateHandlers[tx.initialState]
@@ -228,7 +237,15 @@ func (sm *stateMachine) executeSimpleUpdate(ctx context.Context, tx *stateTransa
 	// Handle the event
 	newStatus, err := handler.Handle(ctx, tx.currentStatus, tx.event, tx.data)
 	if err != nil {
-		return err
+		if common.IsContextCanceled(err) {
+			return fmt.Errorf("context canceled during event handling: %w", err)
+		}
+		return fmt.Errorf("error handling event: %w", err)
+	}
+
+	// Check context after handling event
+	if err := common.CheckContext(ctx); err != nil {
+		return fmt.Errorf("context error after handling event: %w", err)
 	}
 
 	// Update in memory and CR status
@@ -238,20 +255,28 @@ func (sm *stateMachine) executeSimpleUpdate(ctx context.Context, tx *stateTransa
 
 // executeStateTransition executes a full state transition atomically
 func (sm *stateMachine) executeStateTransition(ctx context.Context, tx *stateTransaction) error {
+	// Check context before executing state transition
+	if err := common.CheckContext(ctx); err != nil {
+		return fmt.Errorf("context error before executing state transition: %w", err)
+	}
+
 	// Lock for the entire state transition to prevent race conditions
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Check context cancellation again before proceeding
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
 	// Verify current state hasn't changed since we prepared the transaction
 	currentStatus, exists := sm.statusMap[tx.nodeName]
-	if !exists || currentStatus.CurrentState != tx.initialState {
+	if !exists {
+		return fmt.Errorf("node %s no longer exists in state machine", tx.nodeName)
+	}
+
+	// Store the current state for comparison
+	currentState := currentStatus.CurrentState
+
+	// Check if state has changed since transaction preparation
+	if currentState != tx.initialState {
 		return fmt.Errorf("state changed since transaction preparation (was %s, now %s)",
-			tx.initialState, currentStatus.CurrentState)
+			tx.initialState, currentState)
 	}
 
 	// Get current state handler
@@ -263,7 +288,15 @@ func (sm *stateMachine) executeStateTransition(ctx context.Context, tx *stateTra
 	// Handle the event to determine target state
 	newStatus, err := fromHandler.Handle(ctx, currentStatus, tx.event, tx.data)
 	if err != nil {
+		if common.IsContextCanceled(err) {
+			return fmt.Errorf("context canceled during event handling: %w", err)
+		}
 		return fmt.Errorf("event handler error: %w", err)
+	}
+
+	// Check context after handling event
+	if err := common.CheckContext(ctx); err != nil {
+		return fmt.Errorf("context error after handling event: %w", err)
 	}
 
 	// If state unchanged, just update and return
@@ -274,7 +307,15 @@ func (sm *stateMachine) executeStateTransition(ctx context.Context, tx *stateTra
 
 	// We're changing state, call exit handler
 	if _, err := fromHandler.OnExit(ctx, currentStatus); err != nil {
+		if common.IsContextCanceled(err) {
+			return fmt.Errorf("context canceled during exit handler: %w", err)
+		}
 		return fmt.Errorf("exit handler error: %w", err)
+	}
+
+	// Check context after exit handler
+	if err := common.CheckContext(ctx); err != nil {
+		return fmt.Errorf("context error after exit handler: %w", err)
 	}
 
 	// Call enter handler for new state
@@ -289,6 +330,10 @@ func (sm *stateMachine) executeStateTransition(ctx context.Context, tx *stateTra
 	// Call enter handler
 	finalStatus, err := toHandler.OnEnter(ctx, newStatus)
 	if err != nil {
+		if common.IsContextCanceled(err) {
+			return fmt.Errorf("context canceled during enter handler: %w", err)
+		}
+
 		// We're in an inconsistent state! Attempt to revert
 		log.Printf("ERROR: Enter handler failed, attempting to revert to previous state: %v", err)
 		revertStatus := currentStatus
@@ -300,9 +345,95 @@ func (sm *stateMachine) executeStateTransition(ctx context.Context, tx *stateTra
 		return fmt.Errorf("enter handler error: %w", err)
 	}
 
+	// Check context after enter handler
+	if err := common.CheckContext(ctx); err != nil {
+		return fmt.Errorf("context error after enter handler: %w", err)
+	}
+
 	// Update the status map and CR status
 	sm.statusMap[tx.nodeName] = finalStatus
 	return sm.updateCRStatus(ctx, tx.nodeName, finalStatus)
+}
+
+// updateCRStatus updates the control plane status in the custom resource
+func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, status *models.ControlPlaneStatus) error {
+	// Check context before updating CR status
+	if err := common.CheckContext(ctx); err != nil {
+		return fmt.Errorf("context error before updating CR status: %w", err)
+	}
+
+	// Convert domain status to CRD-compatible format
+	statusData := map[string]interface{}{
+		"controlPlaneNodeName": nodeName,
+		"cpuWinUsage":          math.Round(status.WindowAverageUtilization*10) / 10,
+		"coolDown":             status.CurrentState == models.StateCoolDown,
+		"message":              status.Message,
+		"lastUpdateTime":       status.LastTransitionTime.Format(time.RFC3339),
+	}
+
+	// Update the CR status
+	err := sm.resourceFactory.Status().UpdateGenericWithNode(ctx, models.UpdateKey, models.ResourceName, statusData)
+	if err != nil {
+		if common.IsContextCanceled(err) {
+			return fmt.Errorf("context canceled during CR status update: %w", err)
+		}
+		log.Printf("Failed to update CR status for node %s: %v", nodeName, err)
+		return fmt.Errorf("failed to update CR status: %w", err)
+	}
+
+	log.Printf("Successfully updated CR status for node %s", nodeName)
+	return nil
+}
+
+// Close shuts down the state machine
+func (sm *stateMachine) Close() {
+	if sm.updateQueue != nil {
+		sm.updateQueue.Shutdown()
+	}
+}
+
+// createDefaultStateHandlers creates the default set of state handlers
+func createDefaultStateHandlers(resourceFactory *resource.Factory) map[models.State]interfaces.StateHandler {
+	// Just call the CreateStateHandlers function from factory.go
+	return CreateStateHandlers(resourceFactory)
+}
+
+// ProcessNodeOperation implements the NodeProcessor interface
+func (a *nodeProcessorAdapter) ProcessNodeOperation(
+	ctx context.Context,
+	nodeName string,
+	event models.Event,
+	data map[string]interface{},
+) error {
+	// Create a transaction object to hold the state transition
+	transaction := &stateTransaction{
+		nodeName:      nodeName,
+		event:         event,
+		data:          data,
+		initialState:  "",
+		targetState:   "",
+		currentStatus: nil,
+		newStatus:     nil,
+		executed:      false,
+	}
+
+	// Prepare the transaction
+	if err := a.sm.prepareTransaction(ctx, transaction); err != nil {
+		return fmt.Errorf("failed to prepare transaction: %w", err)
+	}
+
+	// Check context after preparation
+	if err := common.CheckContext(ctx); err != nil {
+		return fmt.Errorf("context error after preparing transaction: %w", err)
+	}
+
+	// No state change needed, just update data
+	if transaction.targetState == "" || transaction.initialState == transaction.targetState {
+		return a.sm.executeSimpleUpdate(ctx, transaction)
+	}
+
+	// Execute the full state transition
+	return a.sm.executeStateTransition(ctx, transaction)
 }
 
 // New type for tracking state transitions

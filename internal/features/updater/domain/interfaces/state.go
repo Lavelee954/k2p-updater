@@ -19,6 +19,9 @@ type StateMachine interface {
 
 	// UpdateStatus updates the status in the custom resource
 	UpdateStatus(ctx context.Context, nodeName string, status *models.ControlPlaneStatus) error
+
+	// Close shuts down the state machine gracefully
+	Close()
 }
 
 // StateHandler defines the interface for individual state handlers

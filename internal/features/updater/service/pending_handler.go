@@ -52,7 +52,7 @@ func (h *pendingHandler) Handle(ctx context.Context, status *domain.ControlPlane
 			ctx,
 			"updater",
 			status.NodeName,
-			"CooldownEnded",
+			string(domain.StatePendingVmSpecUp),
 			"Node %s exited cooldown period, starting CPU monitoring",
 			status.NodeName,
 		)

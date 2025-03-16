@@ -224,7 +224,7 @@ func (e EventInfo) warningRecordInternal(ctx context.Context, resourceKey, nodeN
 	formattedMessage := fmt.Sprintf(message, args...)
 
 	// Create unique event name with timestamp to prevent overwrites
-	eventName := fmt.Sprintf("%s-%s-%s", resourceName, reason, time.Now().Format("20060102-150405.000"))
+	eventName := fmt.Sprintf("%s-%s-%s", resourceName, reason, time.Now().Format(time.RFC3339))
 
 	event := &corev1.Event{
 		ObjectMeta: metav1.ObjectMeta{

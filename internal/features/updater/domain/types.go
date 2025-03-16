@@ -18,7 +18,7 @@ const (
 )
 
 const (
-	UpdateKey    string = "update"
+	UpdateKey    string = "updater"
 	ResourceName string = "master"
 )
 

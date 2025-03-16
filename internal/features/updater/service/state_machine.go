@@ -299,9 +299,9 @@ func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, sta
 		"controlPlaneNodeName": nodeName,
 		"cpuWinUsage":          status.WindowAverageUtilization,
 		"coolDown":             status.CurrentState == domain.StateCoolDown,
-		"updateStatus":         string(status.CurrentState),
-		"message":              status.Message,
-		"lastUpdateTime":       status.LastTransitionTime.Format(time.RFC3339),
+		//"updateStatus":         string(status.CurrentState),
+		"message":        status.Message,
+		"lastUpdateTime": status.LastTransitionTime.Format(time.RFC3339),
 	}
 
 	// Use "k2pupdater-master" as the resource name (from the CR snippet we can see the name format)

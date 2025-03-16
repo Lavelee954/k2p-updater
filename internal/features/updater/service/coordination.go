@@ -2,8 +2,8 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	errorhandling "k2p-updater/internal/common"
 	"k2p-updater/internal/features/updater/domain"
 	"log"
 	"sync"
@@ -30,9 +30,8 @@ func NewCoordinationManager(stateMachine domain.StateMachine) *CoordinationManag
 
 // IsAnyNodeSpecingUp checks if any node is currently being spec'd up
 func (c *CoordinationManager) IsAnyNodeSpecingUp(ctx context.Context, nodes []string) (bool, string, error) {
-	// Check for context cancellation
-	if ctx.Err() != nil {
-		return false, "", ctx.Err()
+	if err := errorhandling.HandleContextError(ctx, "checking nodes spec status"); err != nil {
+		return false, "", err
 	}
 
 	// Add debug logging
@@ -55,9 +54,14 @@ func (c *CoordinationManager) IsAnyNodeSpecingUp(ctx context.Context, nodes []st
 	c.mu.RUnlock()
 
 	// Cache is stale, refresh it
+	// We can't use CheckContextAndExecute here because we need to return multiple values
+	if err := errorhandling.HandleContextError(ctx, "refreshing node status"); err != nil {
+		return false, "", err
+	}
+
 	result, node, err := c.refreshAndCheck(ctx, nodes)
 	if err != nil {
-		if errors.Is(err, context.Canceled) {
+		if errorhandling.IsContextCanceled(err) {
 			log.Printf("Context canceled during spec up check")
 			return false, "", err
 		}
@@ -73,9 +77,8 @@ func (c *CoordinationManager) IsAnyNodeSpecingUp(ctx context.Context, nodes []st
 
 // refreshAndCheck refreshes the state cache and checks for spec up
 func (c *CoordinationManager) refreshAndCheck(ctx context.Context, nodes []string) (bool, string, error) {
-	// Check for context cancellation first
-	if ctx.Err() != nil {
-		return false, "", ctx.Err()
+	if err := errorhandling.HandleContextError(ctx, "refreshing node cache"); err != nil {
+		return false, "", err
 	}
 
 	c.mu.Lock()
@@ -89,16 +92,15 @@ func (c *CoordinationManager) refreshAndCheck(ctx context.Context, nodes []strin
 
 	// First pass: look specifically for any node in InProgressVmSpecUp state
 	for _, nodeName := range nodes {
-		// Check for context cancellation during iteration
-		if ctx.Err() != nil {
-			return false, "", ctx.Err()
+		if err := errorhandling.HandleContextError(ctx, "checking node status"); err != nil {
+			return false, "", err
 		}
 
 		state, err := c.stateMachine.GetCurrentState(ctx, nodeName)
 		if err != nil {
 			// Check if this is due to context cancellation
-			if ctx.Err() != nil {
-				return false, "", ctx.Err()
+			if errorhandling.IsContextCanceled(err) {
+				return false, "", errorhandling.WrapError(err, "context canceled during node status check")
 			}
 
 			log.Printf("Warning: Failed to get state for node %s: %v", nodeName, err)
@@ -141,7 +143,7 @@ func (c *CoordinationManager) NextEligibleNode(ctx context.Context, nodes []stri
 	// Check if any node is already spec'ing up
 	isSpecingUp, specingUpNode, err := c.IsAnyNodeSpecingUp(ctx, nodes)
 	if err != nil {
-		return "", fmt.Errorf("failed to check ongoing spec up: %w", err)
+		return "", errorhandling.WrapError(err, "failed to check ongoing spec up")
 	}
 
 	if isSpecingUp {
@@ -150,6 +152,10 @@ func (c *CoordinationManager) NextEligibleNode(ctx context.Context, nodes []stri
 
 	// Find the first node that's in Monitoring state and has threshold exceeded
 	for _, nodeName := range nodes {
+		if err := errorhandling.HandleContextError(ctx, "checking node eligibility"); err != nil {
+			return "", err
+		}
+
 		status, err := c.stateMachine.GetStatus(ctx, nodeName)
 		if err != nil {
 			log.Printf("Warning: Failed to get status for node %s: %v", nodeName, err)

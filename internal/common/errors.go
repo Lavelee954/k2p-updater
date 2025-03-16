@@ -1,8 +1,10 @@
 package common
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"log"
 )
 
 // Common error types
@@ -133,14 +135,44 @@ func IsNodeNotFoundError(err error) bool {
 	return ok
 }
 
-func IsMetricsUnavailableError(err error) bool {
-	var errMetricsUnavailable ErrMetricsUnavailable
-	ok := errors.As(err, &errMetricsUnavailable)
-	return ok
+// WrapError wraps an error with additional context
+func WrapError(err error, format string, args ...interface{}) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf(format+": %w", append(args, err)...)
 }
 
-func IsInsufficientDataError(err error) bool {
-	var errInsufficientData ErrInsufficientData
-	ok := errors.As(err, &errInsufficientData)
-	return ok
+// HandleContextError checks if the context is canceled or deadline exceeded
+func HandleContextError(ctx context.Context, op string) error {
+	if ctx.Err() == nil {
+		return nil
+	}
+
+	return WrapError(ctx.Err(), "context canceled during %s", op)
+}
+
+// LogAndReturnError logs an error and returns it
+func LogAndReturnError(err error, format string, args ...interface{}) error {
+	if err == nil {
+		return nil
+	}
+
+	errMsg := fmt.Sprintf(format, args...)
+	log.Printf("ERROR: %s: %v", errMsg, err)
+	return WrapError(err, format, args...)
+}
+
+// CheckContextAndExecute checks context before executing a function and handles context errors
+func CheckContextAndExecute(ctx context.Context, op string, fn func() error) error {
+	if err := HandleContextError(ctx, op); err != nil {
+		return err
+	}
+
+	return fn()
+}
+
+// IsContextCanceled checks if an error is due to context cancellation
+func IsContextCanceled(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"k2p-updater/cmd/app"
@@ -149,6 +150,10 @@ func (c *BackendClient) RequestVMSpecUp(ctx context.Context, nodeName string, cu
 		// Send request
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
+			// Check if this is a context cancellation error
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return backoff.Permanent(err)
+			}
 			// Transient network errors should be retried
 			return fmt.Errorf("request failed: %w", err)
 		}
@@ -186,12 +191,23 @@ func (c *BackendClient) RequestVMSpecUp(ctx context.Context, nodeName string, cu
 		operation,
 		expBackoff,
 		func(err error, duration time.Duration) {
+			// Check if we're retrying due to context cancellation
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				log.Printf("Not retrying request to backend for node %s due to context cancellation: %v",
+					nodeName, err)
+				return
+			}
+
 			log.Printf("Request to backend for node %s failed: %v, retrying in %.2f seconds",
 				nodeName, err, duration.Seconds())
 		},
 	)
 
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("RequestVMSpecUp for node %s canceled due to context: %v", nodeName, err)
+			return false, err
+		}
 		c.recordFailure()
 		responseError = err
 	} else {
@@ -217,6 +233,11 @@ func (c *BackendClient) GetVMSpecUpStatus(ctx context.Context, nodeName string) 
 	var responseError error
 
 	operation := func() error {
+		// Check context before each retry
+		if ctx.Err() != nil {
+			return backoff.Permanent(ctx.Err())
+		}
+
 		// Create new request for each retry
 		url := fmt.Sprintf("%s/nodes/%s/specup/status", c.baseURL, nodeName)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -230,6 +251,10 @@ func (c *BackendClient) GetVMSpecUpStatus(ctx context.Context, nodeName string) 
 		// Send request
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
+			// Check if this is a context cancellation error
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return backoff.Permanent(err)
+			}
 			// Transient network errors should be retried
 			return fmt.Errorf("request failed: %w", err)
 		}
@@ -262,9 +287,27 @@ func (c *BackendClient) GetVMSpecUpStatus(ctx context.Context, nodeName string) 
 		}
 	}
 
-	// Execute with retry
-	err := backoff.Retry(operation, expBackoff)
+	// Execute with retry and notify
+	err := backoff.RetryNotify(
+		operation,
+		expBackoff,
+		func(err error, duration time.Duration) {
+			// Check if we're retrying due to context cancellation
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				log.Printf("Not retrying status request for node %s due to context cancellation: %v",
+					nodeName, err)
+				return
+			}
+
+			log.Printf("Status request for node %s failed: %v, retrying in %.2f seconds",
+				nodeName, err, duration.Seconds())
+		},
+	)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			log.Printf("GetVMSpecUpStatus for node %s canceled due to context: %v", nodeName, err)
+			return false, err
+		}
 		c.recordFailure()
 		responseError = err
 	} else {

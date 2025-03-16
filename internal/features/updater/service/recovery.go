@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"k2p-updater/internal/features/updater/domain"
 	"log"
@@ -32,9 +33,17 @@ func NewRecoveryManager(stateMachine domain.StateMachine) *RecoveryManager {
 
 // AttemptRecovery tries to recover a node from a failed state
 func (r *RecoveryManager) AttemptRecovery(ctx context.Context, nodeName string) error {
+	// Check for context cancellation
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	// Get current node status
 	status, err := r.stateMachine.GetStatus(ctx, nodeName)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return ctx.Err()
+		}
 		return fmt.Errorf("failed to get node status: %w", err)
 	}
 
@@ -59,6 +68,11 @@ func (r *RecoveryManager) AttemptRecovery(ctx context.Context, nodeName string) 
 		return nil
 	}
 
+	// Check for context cancellation again
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	// Increment recovery attempts counter
 	r.mu.Lock()
 	r.recoveryAttempts[nodeName]++
@@ -76,6 +90,9 @@ func (r *RecoveryManager) AttemptRecovery(ctx context.Context, nodeName string) 
 
 	// Trigger recovery event
 	if err := r.stateMachine.HandleEvent(ctx, nodeName, domain.EventRecoveryAttempt, data); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return ctx.Err()
+		}
 		return fmt.Errorf("failed to handle recovery event: %w", err)
 	}
 
@@ -93,8 +110,24 @@ func (r *RecoveryManager) ResetRecoveryCounter(nodeName string) {
 
 // CheckAllNodes attempts recovery for all nodes in failed state
 func (r *RecoveryManager) CheckAllNodes(ctx context.Context, nodes []string) {
+	// Check for context cancellation at the beginning
+	if ctx.Err() != nil {
+		log.Printf("Skipping recovery check due to context cancellation: %v", ctx.Err())
+		return
+	}
+
 	for _, nodeName := range nodes {
+		// Check for context cancellation during iteration
+		if ctx.Err() != nil {
+			log.Printf("Context canceled during recovery check: %v", ctx.Err())
+			return
+		}
+
 		if err := r.AttemptRecovery(ctx, nodeName); err != nil {
+			if errors.Is(err, context.Canceled) {
+				log.Printf("Context canceled during recovery attempt for node %s", nodeName)
+				return
+			}
 			log.Printf("Failed to attempt recovery for node %s: %v", nodeName, err)
 		}
 	}

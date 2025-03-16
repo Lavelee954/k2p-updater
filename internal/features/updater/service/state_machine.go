@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"k2p-updater/internal/common"
 	"k2p-updater/internal/features/updater/domain"
@@ -68,6 +69,11 @@ func (sm *stateMachine) GetCurrentState(ctx context.Context, nodeName string) (d
 
 // HandleEvent processes an event and transitions to the next state if needed
 func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event domain.Event, data map[string]interface{}) error {
+	// Check for context cancellation at the beginning
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	// Log at the beginning of event handling
 	log.Printf("STATE MACHINE: Handling event %s for node %s", event, nodeName)
 	sm.mu.Lock()
@@ -96,6 +102,11 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 		log.Printf("DEBUG: Initializing new node %s in state %s", nodeName, status.CurrentState)
 	}
 
+	// Check for context cancellation again before proceeding
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	// Record original state for metrics and logging
 	originalState := status.CurrentState
 	log.Printf("STATE MACHINE: Current state before handling event: %s", originalState)
@@ -112,8 +123,17 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 		nodeName, status.CurrentState, event)
 	newStatus, err := handler.Handle(ctx, status, event, data)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Printf("Context canceled during event handling: %v", err)
+			return err
+		}
 		log.Printf("ERROR: Handler error for node %s: %v", nodeName, err)
 		return fmt.Errorf("error handling event %s in state %s: %w", event, status.CurrentState, err)
+	}
+
+	// Check for context cancellation after handling
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
 	// Log the potential new state
@@ -131,8 +151,17 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 			log.Printf("DEBUG: Calling OnExit for node %s state %s",
 				nodeName, status.CurrentState)
 			if _, err := exitHandler.OnExit(ctx, status); err != nil {
+				if errors.Is(err, context.Canceled) {
+					log.Printf("Context canceled during exit handler: %v", err)
+					return err
+				}
 				log.Printf("ERROR: Exit handler error for node %s: %v", nodeName, err)
 			}
+		}
+
+		// Check for context cancellation before entering new state
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 
 		// Update timestamp and perform transition
@@ -144,6 +173,10 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 			log.Printf("DEBUG: Calling OnEnter for node %s state %s",
 				nodeName, newStatus.CurrentState)
 			if updatedStatus, err := enterHandler.OnEnter(ctx, newStatus); err != nil {
+				if errors.Is(err, context.Canceled) {
+					log.Printf("Context canceled during enter handler: %v", err)
+					return err
+				}
 				log.Printf("ERROR: Enter handler error for node %s: %v", nodeName, err)
 			} else {
 				newStatus = updatedStatus
@@ -196,12 +229,21 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 		}
 	}
 
+	// Check for context cancellation before updating status
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	// Update status in map
 	sm.statusMap[nodeName] = newStatus
 	log.Printf("DEBUG: Final state after event handling: %s", newStatus.CurrentState)
 
 	// Update the custom resource status
 	if err := sm.updateCRStatus(ctx, nodeName, newStatus); err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Printf("Context canceled during CR status update: %v", err)
+			return err
+		}
 		log.Printf("ERROR: Failed to update CR status for node %s: %v", nodeName, err)
 	} else {
 		log.Printf("DEBUG: Successfully updated CR status for node %s", nodeName)
@@ -243,6 +285,11 @@ func (sm *stateMachine) UpdateStatus(ctx context.Context, nodeName string, statu
 
 // updateCRStatus updates the control plane status in the custom resource
 func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, status *domain.ControlPlaneStatus) error {
+	// Check for context cancellation
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
 	// Log what we're trying to update
 	log.Printf("State machine updating CR status for node %s: state=%s, CPU=%.2f%%, window=%.2f%%",
 		nodeName, status.CurrentState, status.CPUUtilization, status.WindowAverageUtilization)
@@ -260,6 +307,10 @@ func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, sta
 	// Use "k2pupdater-master" as the resource name (from the CR snippet we can see the name format)
 	err := sm.resourceFactory.Status().UpdateGenericWithNode(ctx, "updater", "master", statusData)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Printf("Context canceled during CR status update: %v", err)
+			return err
+		}
 		log.Printf("Failed to update CR status for node %s: %v", nodeName, err)
 		return err
 	}

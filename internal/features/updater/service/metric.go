@@ -91,7 +91,17 @@ func (c *DefaultMetricsComponent) monitorNodesReadiness(ctx context.Context) {
 			log.Printf("Metrics monitoring stopped due to context cancellation: %v", ctx.Err())
 			return
 		case <-ticker.C:
-			if err := c.checkAllNodesMetricsReadiness(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			// Check for context cancellation before processing
+			if ctx.Err() != nil {
+				log.Printf("Skipping metrics readiness check due to context cancellation: %v", ctx.Err())
+				return
+			}
+
+			if err := c.checkAllNodesMetricsReadiness(ctx); err != nil {
+				if errors.Is(err, context.Canceled) {
+					log.Printf("Metrics readiness check canceled: %v", err)
+					return
+				}
 				log.Printf("Error checking metrics readiness: %v", err)
 			}
 		}
@@ -103,7 +113,7 @@ func (c *DefaultMetricsComponent) checkAllNodesMetricsReadiness(ctx context.Cont
 	// Add a check for context cancellation at the beginning
 	if ctx.Err() != nil {
 		log.Printf("Skipping metrics readiness check due to context cancellation: %v", ctx.Err())
-		return nil
+		return ctx.Err()
 	}
 
 	c.statusMutex.RLock()
@@ -117,7 +127,7 @@ func (c *DefaultMetricsComponent) checkAllNodesMetricsReadiness(ctx context.Cont
 		// Check context cancellation during iteration
 		if ctx.Err() != nil {
 			log.Printf("Stopping metrics readiness check due to context cancellation: %v", ctx.Err())
-			return nil
+			return ctx.Err()
 		}
 
 		// Call the method directly as in the original code
@@ -129,6 +139,12 @@ func (c *DefaultMetricsComponent) checkAllNodesMetricsReadiness(ctx context.Cont
 
 // checkNodeMetricsReadiness checks if metrics are available for a specific node
 func (c *DefaultMetricsComponent) checkNodeMetricsReadiness(ctx context.Context, nodeName string) {
+	// Check for context cancellation at the beginning
+	if ctx.Err() != nil {
+		log.Printf("Skipping node metrics readiness check due to context cancellation: %v", ctx.Err())
+		return
+	}
+
 	c.statusMutex.Lock()
 	status, exists := c.nodeStatus[nodeName]
 	if !exists {
@@ -147,6 +163,12 @@ func (c *DefaultMetricsComponent) checkNodeMetricsReadiness(ctx context.Context,
 		return
 	}
 
+	// Check if context is still valid
+	if ctx.Err() != nil {
+		log.Printf("Context canceled during metrics readiness check: %v", ctx.Err())
+		return
+	}
+
 	// Check if metrics are available
 	_, err := c.metricsService.GetNodeCPUUsage(nodeName)
 	if err != nil {
@@ -159,6 +181,12 @@ func (c *DefaultMetricsComponent) checkNodeMetricsReadiness(ctx context.Context,
 			status.Message = fmt.Sprintf("Waiting for metrics to become available (attempt %d)", status.RetryCount)
 		}
 		c.statusMutex.Unlock()
+		return
+	}
+
+	// Check if context is still valid
+	if ctx.Err() != nil {
+		log.Printf("Context canceled during metrics window check: %v", ctx.Err())
 		return
 	}
 
@@ -193,12 +221,24 @@ func (c *DefaultMetricsComponent) checkNodeMetricsReadiness(ctx context.Context,
 	status.LastUpdated = time.Now()
 	c.statusMutex.Unlock()
 
+	// Check context again before updating state machine
+	if ctx.Err() != nil {
+		log.Printf("Context canceled before updating node status in state machine: %v", ctx.Err())
+		return
+	}
+
 	// Update node status in state machine if needed
 	c.updateNodeStatusInStateMachine(ctx, nodeName)
 }
 
 // updateNodeStatusInStateMachine updates status in the state machine based on metrics state
 func (c *DefaultMetricsComponent) updateNodeStatusInStateMachine(ctx context.Context, nodeName string) {
+	// Check for context cancellation at the beginning
+	if ctx.Err() != nil {
+		log.Printf("Skipping state machine update due to context cancellation: %v", ctx.Err())
+		return
+	}
+
 	c.statusMutex.RLock()
 	status := c.nodeStatus[nodeName]
 	c.statusMutex.RUnlock()
@@ -213,6 +253,12 @@ func (c *DefaultMetricsComponent) updateNodeStatusInStateMachine(ctx context.Con
 	if currentStatus.CurrentState != domain.StateMonitoring &&
 		currentStatus.CurrentState != domain.StatePendingVmSpecUp &&
 		currentStatus.CurrentState != domain.StateCoolDown {
+		return
+	}
+
+	// Check context again before proceeding
+	if ctx.Err() != nil {
+		log.Printf("Context canceled during state determination: %v", ctx.Err())
 		return
 	}
 
@@ -234,11 +280,16 @@ func (c *DefaultMetricsComponent) updateNodeStatusInStateMachine(ctx context.Con
 			"message": status.Message,
 		}
 
+		// Check context again before making state change
+		if ctx.Err() != nil {
+			log.Printf("Context canceled before handling state event: %v", ctx.Err())
+			return
+		}
+
 		if err := c.stateMachine.HandleEvent(ctx, nodeName, domain.EventInitialize, data); err != nil {
 			log.Printf("Failed to update node state based on metrics state: %v", err)
 		}
 	}
-
 }
 
 // GetMetricsState returns the current metrics collection state for a node
@@ -292,6 +343,11 @@ func (c *DefaultMetricsComponent) GetNodeCPUMetrics(nodeName string) (float64, f
 
 // IsWindowReadyForScaling checks if the window is mature enough for scaling decisions
 func (c *DefaultMetricsComponent) IsWindowReadyForScaling(ctx context.Context, nodeName string) (bool, error) {
+	// Check for context cancellation
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+
 	// Check metrics state first
 	metricsState := c.GetMetricsState(nodeName)
 	if metricsState != MetricsReady {
@@ -310,6 +366,11 @@ func (c *DefaultMetricsComponent) IsWindowReadyForScaling(ctx context.Context, n
 
 // CheckCPUThresholdExceeded determines if a node's CPU utilization exceeds the threshold
 func (c *DefaultMetricsComponent) CheckCPUThresholdExceeded(ctx context.Context, nodeName string) (bool, float64, float64, error) {
+	// Check for context cancellation
+	if ctx.Err() != nil {
+		return false, 0, 0, ctx.Err()
+	}
+
 	// Get metrics state first
 	metricsState := c.GetMetricsState(nodeName)
 	if metricsState != MetricsReady {
@@ -320,6 +381,9 @@ func (c *DefaultMetricsComponent) CheckCPUThresholdExceeded(ctx context.Context,
 	// Get current and window average CPU metrics
 	currentCPU, windowAvg, err := c.GetNodeCPUMetrics(nodeName)
 	if err != nil {
+		if ctx.Err() != nil {
+			return false, 0, 0, ctx.Err()
+		}
 		return false, 0, 0, fmt.Errorf("failed to get CPU metrics: %w", err)
 	}
 

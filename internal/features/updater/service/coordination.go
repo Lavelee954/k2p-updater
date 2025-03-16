@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"k2p-updater/internal/features/updater/domain"
 	"log"
@@ -29,6 +30,11 @@ func NewCoordinationManager(stateMachine domain.StateMachine) *CoordinationManag
 
 // IsAnyNodeSpecingUp checks if any node is currently being spec'd up
 func (c *CoordinationManager) IsAnyNodeSpecingUp(ctx context.Context, nodes []string) (bool, string, error) {
+	// Check for context cancellation
+	if ctx.Err() != nil {
+		return false, "", ctx.Err()
+	}
+
 	// Add debug logging
 	log.Printf("Checking if any of %d nodes is currently spec'ing up", len(nodes))
 
@@ -51,6 +57,10 @@ func (c *CoordinationManager) IsAnyNodeSpecingUp(ctx context.Context, nodes []st
 	// Cache is stale, refresh it
 	result, node, err := c.refreshAndCheck(ctx, nodes)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			log.Printf("Context canceled during spec up check")
+			return false, "", err
+		}
 		log.Printf("Error checking nodes status: %v", err)
 	} else if result {
 		log.Printf("Found node %s in InProgressVmSpecUp state (refreshed)", node)
@@ -86,6 +96,11 @@ func (c *CoordinationManager) refreshAndCheck(ctx context.Context, nodes []strin
 
 		state, err := c.stateMachine.GetCurrentState(ctx, nodeName)
 		if err != nil {
+			// Check if this is due to context cancellation
+			if ctx.Err() != nil {
+				return false, "", ctx.Err()
+			}
+
 			log.Printf("Warning: Failed to get state for node %s: %v", nodeName, err)
 
 			// Use cached state if available

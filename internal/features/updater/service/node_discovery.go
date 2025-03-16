@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"k2p-updater/internal/common"
 	"log"
@@ -28,6 +29,11 @@ func NewNodeDiscoverer(kubeClient kubernetes.Interface, namespace string) *NodeD
 
 // DiscoverControlPlaneNodes discovers control plane nodes from Kubernetes API
 func (d *NodeDiscoverer) DiscoverControlPlaneNodes(ctx context.Context) ([]string, error) {
+	// Check for context cancellation
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+
 	if d.kubeClient == nil {
 		return nil, common.NotInitializedError("Kubernetes client not initialized")
 	}
@@ -38,6 +44,9 @@ func (d *NodeDiscoverer) DiscoverControlPlaneNodes(ctx context.Context) ([]strin
 	})
 
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("failed to list control plane nodes: %w", err)
 	}
 

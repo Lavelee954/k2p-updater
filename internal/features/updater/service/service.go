@@ -788,7 +788,7 @@ func (s *UpdaterService) updateAllCooldowns(ctx context.Context) {
 					ctx,
 					"updater",
 					nodeName,
-					"CooldownEnded",
+					string(updaterDomain.StatePendingVmSpecUp),
 					"Node %s cooldown period ended, transitioning to monitoring state",
 					nodeName,
 				)

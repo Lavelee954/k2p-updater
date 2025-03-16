@@ -133,7 +133,7 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 		// Create a state transition event
 		h.resourceFactory.Event().NormalRecordWithNode(
 			ctx,
-			"updater",
+			domain.UpdateKey,
 			status.NodeName,
 			string(domain.StatePendingVmSpecUp),
 			"Node %s state changed from CoolDown to Monitoring, cooldown period completed",
@@ -164,7 +164,7 @@ func (h *coolDownHandler) OnEnter(ctx context.Context, status *domain.ControlPla
 	// Record the event
 	err := h.resourceFactory.Event().NormalRecordWithNode(
 		ctx,
-		"updater",
+		domain.UpdateKey,
 		status.NodeName,
 		"CoolDown",
 		"Node %s entered cooldown period for %.1f minutes after VM spec up",

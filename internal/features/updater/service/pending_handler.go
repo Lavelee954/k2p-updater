@@ -50,7 +50,7 @@ func (h *pendingHandler) Handle(ctx context.Context, status *domain.ControlPlane
 		// Record transition in events
 		h.resourceFactory.Event().NormalRecordWithNode(
 			ctx,
-			"updater",
+			domain.UpdateKey,
 			status.NodeName,
 			string(domain.StatePendingVmSpecUp),
 			"Node %s exited cooldown period, starting CPU monitoring",
@@ -71,7 +71,7 @@ func (h *pendingHandler) OnEnter(ctx context.Context, status *domain.ControlPlan
 	// Record the event
 	err := h.resourceFactory.Event().NormalRecordWithNode(
 		ctx,
-		"updater",
+		domain.UpdateKey,
 		status.NodeName,
 		"PendingVmSpecUp",
 		"Node %s is in cooldown period, pending VM spec up",

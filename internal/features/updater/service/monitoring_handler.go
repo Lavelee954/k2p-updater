@@ -93,7 +93,7 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *domain.ControlPl
 			// Record the periodic monitoring event
 			h.resourceFactory.Event().NormalRecordWithNode(
 				ctx,
-				"updater",
+				domain.UpdateKey,
 				status.NodeName,
 				string(domain.StatePendingVmSpecUp),
 				"Node %s periodic monitoring report (10min): CPU current %.2f%%, window avg %.2f%%",
@@ -124,7 +124,7 @@ func (h *monitoringHandler) OnEnter(ctx context.Context, status *domain.ControlP
 	// Record the event
 	err := h.resourceFactory.Event().NormalRecordWithNode(
 		ctx,
-		"updater",
+		domain.UpdateKey,
 		status.NodeName,
 		string(domain.StatePendingVmSpecUp),
 		"Node %s is now monitoring CPU utilization (current: %.2f%%, window avg: %.2f%%)",
@@ -161,7 +161,7 @@ func (h *monitoringHandler) OnExit(ctx context.Context, status *domain.ControlPl
 
 	err := h.resourceFactory.Event().NormalRecordWithNode(
 		ctx,
-		"updater",
+		domain.UpdateKey,
 		status.NodeName,
 		string(domain.StatePendingVmSpecUp),
 		eventMsg,

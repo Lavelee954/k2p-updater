@@ -98,7 +98,7 @@ func (h *inProgressHandler) OnEnter(ctx context.Context, status *domain.ControlP
 	// Record the VM state transition event
 	err := h.resourceFactory.Event().NormalRecordWithNode(
 		ctx,
-		"updater",
+		domain.UpdateKey,
 		status.NodeName,
 		"VMStateTransition",
 		"Node %s VM state changed from %s to InProgressVmSpecUp with CPU utilization at %.2f%% (window avg: %.2f%%)",

@@ -180,7 +180,7 @@ func (s *NodeEventService) verifyEventCreation(ctx context.Context) {
 		// Create a test verification event
 		err := s.resourceFactory.Event().NormalRecordWithNode(
 			ctx,
-			"updater",
+			domain.UpdateKey,
 			nodeName,
 			"EventVerification",
 			"Verification event for node %s at %s",
@@ -230,7 +230,7 @@ func (s *NodeEventService) updateNodeStatusInCR(ctx context.Context, nodeName st
 		nodeName, status.CPUUtilization, status.WindowAverageUtilization)
 
 	// Always use "master" as the node name for updater resource
-	err = s.resourceFactory.Status().UpdateGenericWithNode(ctx, "updater", "master", statusData)
+	err = s.resourceFactory.Status().UpdateGenericWithNode(ctx, domain.UpdateKey, "master", statusData)
 	if err != nil {
 		log.Printf("Failed to update CR status for node %s: %v", nodeName, err)
 	} else {

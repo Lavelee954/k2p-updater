@@ -17,6 +17,10 @@ const (
 	StateCoolDown           State = "CoolDown"
 )
 
+const (
+	UpdateKey string = "update"
+)
+
 // ControlPlaneStatus represents the current status of a control plane node
 type ControlPlaneStatus struct {
 	// NodeName is the Kubernetes node name

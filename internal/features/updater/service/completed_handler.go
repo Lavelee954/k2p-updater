@@ -63,7 +63,7 @@ func (h *completedHandler) OnEnter(ctx context.Context, status *domain.ControlPl
 	// Record the event
 	err := h.resourceFactory.Event().NormalRecordWithNode(
 		ctx,
-		"updater",
+		domain.UpdateKey,
 		status.NodeName,
 		"CompletedVmSpecUp",
 		"Node %s completed VM spec up process successfully",

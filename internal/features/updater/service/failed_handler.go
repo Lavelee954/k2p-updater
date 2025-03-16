@@ -66,7 +66,7 @@ func (h *failedHandler) OnEnter(ctx context.Context, status *domain.ControlPlane
 	// Record the failed event
 	err := h.resourceFactory.Event().WarningRecordWithNode(
 		ctx,
-		"updater",
+		domain.UpdateKey,
 		status.NodeName,
 		"FailedVmSpecUp",
 		"Node %s failed VM spec up process: %s",

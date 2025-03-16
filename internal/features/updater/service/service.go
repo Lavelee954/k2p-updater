@@ -119,7 +119,7 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 		// Add startup event
 		startupEvent := s.resourceFactory.Event().NormalRecordWithNode(
 			ctx,
-			"updater",
+			updaterDomain.UpdateKey,
 			"master",
 			string(updaterDomain.StatePendingVmSpecUp),
 			"K2P-Updater service starting with %d control plane nodes configured",
@@ -150,7 +150,7 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 		if len(s.nodes) > 0 {
 			nodesDiscoveredEvent := s.resourceFactory.Event().NormalRecordWithNode(
 				ctx,
-				"updater",
+				updaterDomain.UpdateKey,
 				"master",
 				string(updaterDomain.StatePendingVmSpecUp),
 				"Discovered %d control plane nodes: %s",
@@ -836,7 +836,7 @@ func (s *UpdaterService) updateAllCooldowns(ctx context.Context) {
 				}
 				s.resourceFactory.Event().NormalRecordWithNode(
 					ctx,
-					"updater",
+					updaterDomain.UpdateKey,
 					nodeName,
 					string(updaterDomain.StatePendingVmSpecUp),
 					"Node %s cooldown period ended, transitioning to monitoring state",

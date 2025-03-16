@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	domainExporter "k2p-updater/internal/features/exporter/domain"
+	"k2p-updater/internal/features/exporter/domain"
 	"log"
 	"net/http"
 	"time"
@@ -16,7 +16,7 @@ type NodeMetricsFetcher struct {
 }
 
 // FetchNodeMetrics retrieves metrics from a node-exporter
-func (f *NodeMetricsFetcher) FetchNodeMetrics(ctx context.Context, exporter domainExporter.NodeExporter) (string, error) {
+func (f *NodeMetricsFetcher) FetchNodeMetrics(ctx context.Context, exporter domain.NodeExporter) (string, error) {
 	client := &http.Client{Timeout: f.timeout}
 	url := fmt.Sprintf("http://%s:9100/metrics", exporter.IP)
 

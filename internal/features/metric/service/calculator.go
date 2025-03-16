@@ -1,7 +1,7 @@
 package service
 
 import (
-	domainMetric "k2p-updater/internal/features/metric/domain"
+	"k2p-updater/internal/features/metric/domain"
 	"log"
 )
 
@@ -10,10 +10,10 @@ type CPUUtilizationCalculator struct{}
 
 // CalculateUtilization calculates CPU usage percentages
 func (c *CPUUtilizationCalculator) CalculateUtilization(
-	current domainMetric.CPUStats,
+	current domain.CPUStats,
 	cpuID string,
 	nodeName string,
-	previousStats map[string]map[string]domainMetric.CPUStats,
+	previousStats map[string]map[string]domain.CPUStats,
 ) (user, system, idle float64) {
 	if prev, exists := previousStats[nodeName]; exists {
 		if prevStats, exists := prev[cpuID]; exists {
@@ -39,7 +39,7 @@ func (c *CPUUtilizationCalculator) CalculateUtilization(
 
 	// Store current values for next calculation
 	if _, exists := previousStats[nodeName]; !exists {
-		previousStats[nodeName] = make(map[string]domainMetric.CPUStats)
+		previousStats[nodeName] = make(map[string]domain.CPUStats)
 	}
 	previousStats[nodeName][cpuID] = current
 

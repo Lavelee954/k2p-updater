@@ -2,7 +2,7 @@ package service
 
 import (
 	"fmt"
-	domainMetric "k2p-updater/internal/features/metric/domain"
+	"k2p-updater/internal/features/metric/domain"
 	"regexp"
 	"strconv"
 	"strings"
@@ -13,10 +13,10 @@ import (
 type CPUMetricsParser struct{}
 
 // ParseCPUMetrics parses raw metrics data
-func (p *CPUMetricsParser) ParseCPUMetrics(metrics string, nodeName string) (*domainMetric.NodeCPUMetrics, error) {
-	result := &domainMetric.NodeCPUMetrics{
+func (p *CPUMetricsParser) ParseCPUMetrics(metrics string, nodeName string) (*domain.NodeCPUMetrics, error) {
+	result := &domain.NodeCPUMetrics{
 		NodeName: nodeName,
-		CPUs:     make(map[string]domainMetric.CPUStats),
+		CPUs:     make(map[string]domain.CPUStats),
 	}
 
 	lines := strings.Split(metrics, "\n")

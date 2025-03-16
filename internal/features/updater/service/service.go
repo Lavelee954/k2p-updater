@@ -71,7 +71,11 @@ func NewUpdaterService(
 	stateMachine := NewStateMachine(resourceFactory)
 
 	// Initialize metrics component
-	metricsComponent := NewMetricsComponent(metricsService, stateMachine, metricsConfig)
+	metricsComponent := NewMetricsComponent(
+		metricsService,
+		stateMachine,
+		metricsConfig,
+	)
 
 	// Create the updater service
 	service := &UpdaterService{

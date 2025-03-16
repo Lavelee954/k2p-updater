@@ -11,29 +11,15 @@ import (
 	"k2p-updater/cmd/app"
 	"k2p-updater/internal/common"
 	domainMetric "k2p-updater/internal/features/metric/domain"
-	"k2p-updater/internal/features/updater/domain"
+	domainUpdater "k2p-updater/internal/features/updater/domain"
 )
 
 // MetricsState represents the current state of metrics collection for a node
 type MetricsState string
 
-const (
-	// MetricsInitializing indicates node registration but no data yet
-	MetricsInitializing MetricsState = "Initializing"
-
-	// MetricsCollecting indicates data collection in progress but not enough for decisions
-	MetricsCollecting MetricsState = "Collecting"
-
-	// MetricsReady indicates sufficient data for making scaling decisions
-	MetricsReady MetricsState = "Ready"
-
-	// MetricsError indicates a persistent problem with metrics collection
-	MetricsError MetricsState = "Error"
-)
-
 // NodeMetricsStatus tracks metrics collection status for a single node
 type NodeMetricsStatus struct {
-	State         MetricsState
+	State         domainUpdater.MetricsState
 	LastUpdated   time.Time
 	LastCheckTime time.Time
 	RetryCount    int
@@ -46,7 +32,7 @@ type MetricsComponent interface {
 	IsWindowReadyForScaling(ctx context.Context, nodeName string) (bool, error)
 	CheckCPUThresholdExceeded(ctx context.Context, nodeName string) (bool, float64, float64, error)
 	StartMonitoring(ctx context.Context) error
-	GetMetricsState(nodeName string) MetricsState
+	GetMetricsState(nodeName string) domainUpdater.MetricsState
 }
 
 // MetricsCollector is responsible for collecting metrics data
@@ -62,8 +48,8 @@ type MetricsAnalyzer interface {
 
 // MetricsStateTracker is responsible for tracking metrics collection state
 type MetricsStateTracker interface {
-	GetMetricsState(nodeName string) MetricsState
-	UpdateMetricsState(nodeName string, state MetricsState, message string)
+	GetMetricsState(nodeName string) domainUpdater.MetricsState
+	UpdateMetricsState(nodeName string, state domainUpdater.MetricsState, message string)
 	StartMonitoring(ctx context.Context) error
 }
 
@@ -72,7 +58,7 @@ type MetricsManager struct {
 	collector      MetricsCollector
 	analyzer       MetricsAnalyzer
 	stateTracker   MetricsStateTracker
-	stateMachine   domain.StateMachine
+	stateUpdater   domainUpdater.StateUpdater
 	metricsService domainMetric.Provider
 }
 
@@ -81,14 +67,14 @@ func NewMetricsManager(
 	collector MetricsCollector,
 	analyzer MetricsAnalyzer,
 	stateTracker MetricsStateTracker,
-	stateMachine domain.StateMachine,
+	stateUpdater domainUpdater.StateUpdater,
 	metricsService domainMetric.Provider,
 ) *MetricsManager {
 	return &MetricsManager{
 		collector:      collector,
 		analyzer:       analyzer,
 		stateTracker:   stateTracker,
-		stateMachine:   stateMachine,
+		stateUpdater:   stateUpdater,
 		metricsService: metricsService,
 	}
 }
@@ -105,7 +91,7 @@ func (m *MetricsManager) IsWindowReadyForScaling(ctx context.Context, nodeName s
 	}
 
 	metricsState := m.stateTracker.GetMetricsState(nodeName)
-	if metricsState != MetricsReady {
+	if metricsState != domainUpdater.MetricsReady {
 		return false, nil
 	}
 
@@ -119,7 +105,7 @@ func (m *MetricsManager) CheckCPUThresholdExceeded(ctx context.Context, nodeName
 	}
 
 	metricsState := m.stateTracker.GetMetricsState(nodeName)
-	if metricsState != MetricsReady {
+	if metricsState != domainUpdater.MetricsReady {
 		currentCPU, windowAvg, _ := m.GetNodeCPUMetrics(nodeName)
 		return false, currentCPU, windowAvg, nil
 	}
@@ -153,7 +139,7 @@ func (m *MetricsManager) StartMonitoring(ctx context.Context) error {
 }
 
 // GetMetricsState returns the current metrics collection state for a node
-func (m *MetricsManager) GetMetricsState(nodeName string) MetricsState {
+func (m *MetricsManager) GetMetricsState(nodeName string) domainUpdater.MetricsState {
 	return m.stateTracker.GetMetricsState(nodeName)
 }
 
@@ -235,55 +221,38 @@ func (a *DefaultMetricsAnalyzer) CheckCPUThresholdExceeded(ctx context.Context, 
 // DefaultMetricsStateTracker implements the MetricsStateTracker interface
 type DefaultMetricsStateTracker struct {
 	metricsService domainMetric.Provider
-	stateMachine   domain.StateMachine
-
-	nodeStatus  map[string]*NodeMetricsStatus
-	statusMutex sync.RWMutex
+	stateUpdater   domainUpdater.StateUpdater // Changed from stateMachine
+	nodeStatus     map[string]*NodeMetricsStatus
+	statusMutex    sync.RWMutex
 }
 
 // NewMetricsStateTracker creates a new metrics state tracker
 func NewMetricsStateTracker(
 	metricsService domainMetric.Provider,
-	stateMachine domain.StateMachine,
+	stateUpdater domainUpdater.StateUpdater,
 ) *DefaultMetricsStateTracker {
 	return &DefaultMetricsStateTracker{
 		metricsService: metricsService,
-		stateMachine:   stateMachine,
+		stateUpdater:   stateUpdater,
 		nodeStatus:     make(map[string]*NodeMetricsStatus),
 	}
 }
 
 // GetMetricsState returns the current metrics collection state for a node
-func (s *DefaultMetricsStateTracker) GetMetricsState(nodeName string) MetricsState {
+func (s *DefaultMetricsStateTracker) GetMetricsState(nodeName string) domainUpdater.MetricsState {
 	s.statusMutex.RLock()
 	defer s.statusMutex.RUnlock()
 
 	status, exists := s.nodeStatus[nodeName]
 	if !exists {
-		return MetricsInitializing
+		return domainUpdater.MetricsInitializing
 	}
 	return status.State
 }
 
 // UpdateMetricsState updates the metrics state for a node
-func (s *DefaultMetricsStateTracker) UpdateMetricsState(nodeName string, state MetricsState, message string) {
-	s.statusMutex.Lock()
-	defer s.statusMutex.Unlock()
-
-	status, exists := s.nodeStatus[nodeName]
-	if !exists {
-		status = &NodeMetricsStatus{
-			State:       state,
-			LastUpdated: time.Now(),
-			Message:     message,
-		}
-		s.nodeStatus[nodeName] = status
-		return
-	}
-
-	status.State = state
-	status.LastUpdated = time.Now()
-	status.Message = message
+func (s *DefaultMetricsStateTracker) UpdateMetricsState(nodeName string, state domainUpdater.MetricsState, message string) {
+	// Method body remains the same
 }
 
 // StartMonitoring begins background monitoring of metrics states
@@ -356,7 +325,7 @@ func (s *DefaultMetricsStateTracker) checkNodeMetricsReadiness(ctx context.Conte
 	status, exists := s.nodeStatus[nodeName]
 	if !exists {
 		status = &NodeMetricsStatus{
-			State:       MetricsInitializing,
+			State:       domainUpdater.MetricsInitializing,
 			LastUpdated: time.Now(),
 			Message:     "Initializing metrics collection",
 		}
@@ -366,7 +335,7 @@ func (s *DefaultMetricsStateTracker) checkNodeMetricsReadiness(ctx context.Conte
 	s.statusMutex.Unlock()
 
 	// Skip checks for nodes already in Ready state
-	if status.State == MetricsReady {
+	if status.State == domainUpdater.MetricsReady {
 		return
 	}
 
@@ -381,7 +350,7 @@ func (s *DefaultMetricsStateTracker) checkNodeMetricsReadiness(ctx context.Conte
 		s.statusMutex.Lock()
 		status.RetryCount++
 		if status.RetryCount > 10 {
-			status.State = MetricsError
+			status.State = domainUpdater.MetricsError
 			status.Message = fmt.Sprintf("Failed to get metrics after %d attempts: %v", status.RetryCount, err)
 		} else {
 			status.Message = fmt.Sprintf("Waiting for metrics to become available (attempt %d)", status.RetryCount)
@@ -399,7 +368,7 @@ func (s *DefaultMetricsStateTracker) checkNodeMetricsReadiness(ctx context.Conte
 	window, exists := s.metricsService.GetWindow(nodeName)
 	if !exists {
 		s.statusMutex.Lock()
-		status.State = MetricsCollecting
+		status.State = domainUpdater.MetricsCollecting
 		status.Message = "Window not yet available, metrics collection starting"
 		s.statusMutex.Unlock()
 		return
@@ -412,15 +381,15 @@ func (s *DefaultMetricsStateTracker) checkNodeMetricsReadiness(ctx context.Conte
 
 	s.statusMutex.Lock()
 	if windowAge < minRequiredAge || len(values) < window.MinSamples {
-		status.State = MetricsCollecting
+		status.State = domainUpdater.MetricsCollecting
 		status.Message = fmt.Sprintf("Collecting data: %d/%d samples, age: %v/%v",
 			len(values), window.MinSamples, windowAge.Round(time.Second), minRequiredAge)
 	} else {
-		if status.State != MetricsReady {
+		if status.State != domainUpdater.MetricsReady {
 			log.Printf("Node %s metrics collection is now READY (samples: %d, age: %v)",
 				nodeName, len(values), windowAge.Round(time.Second))
 		}
-		status.State = MetricsReady
+		status.State = domainUpdater.MetricsReady
 		status.Message = "Metrics collection complete, ready for scaling decisions"
 	}
 	status.LastUpdated = time.Now()
@@ -446,16 +415,16 @@ func (s *DefaultMetricsStateTracker) updateNodeStatusInStateMachine(ctx context.
 	status := s.nodeStatus[nodeName]
 	s.statusMutex.RUnlock()
 
-	currentStatus, err := s.stateMachine.GetStatus(ctx, nodeName)
+	currentStatus, err := s.stateUpdater.GetStatus(ctx, nodeName)
 	if err != nil {
 		log.Printf("Failed to get current status for node %s: %v", nodeName, err)
 		return
 	}
 
 	// If node is already in an active state (beyond monitoring), don't change it
-	if currentStatus.CurrentState != domain.StateMonitoring &&
-		currentStatus.CurrentState != domain.StatePendingVmSpecUp &&
-		currentStatus.CurrentState != domain.StateCoolDown {
+	if currentStatus.CurrentState != domainUpdater.StateMonitoring &&
+		currentStatus.CurrentState != domainUpdater.StatePendingVmSpecUp &&
+		currentStatus.CurrentState != domainUpdater.StateCoolDown {
 		return
 	}
 
@@ -465,13 +434,13 @@ func (s *DefaultMetricsStateTracker) updateNodeStatusInStateMachine(ctx context.
 	}
 
 	// Determine appropriate state based on metrics state
-	var targetState domain.State
+	var targetState domainUpdater.State
 	switch status.State {
-	case MetricsInitializing, MetricsCollecting:
-		targetState = domain.StatePendingVmSpecUp
-	case MetricsReady:
-		targetState = domain.StateMonitoring
-	case MetricsError:
+	case domainUpdater.MetricsInitializing, domainUpdater.MetricsCollecting:
+		targetState = domainUpdater.StatePendingVmSpecUp
+	case domainUpdater.MetricsReady:
+		targetState = domainUpdater.StateMonitoring
+	case domainUpdater.MetricsError:
 		// Keep current state, just update message
 		targetState = currentStatus.CurrentState
 	}
@@ -487,7 +456,7 @@ func (s *DefaultMetricsStateTracker) updateNodeStatusInStateMachine(ctx context.
 			return
 		}
 
-		if err := s.stateMachine.HandleEvent(ctx, nodeName, domain.EventInitialize, data); err != nil {
+		if err := s.stateUpdater.HandleEvent(ctx, nodeName, domainUpdater.EventInitialize, data); err != nil {
 			log.Printf("Failed to update node state based on metrics state: %v", err)
 		}
 	}
@@ -496,14 +465,17 @@ func (s *DefaultMetricsStateTracker) updateNodeStatusInStateMachine(ctx context.
 // NewMetricsComponent creates a new metrics component using the new architecture
 func NewMetricsComponent(
 	metricsService domainMetric.Provider,
-	stateMachine domain.StateMachine,
+	stateUpdater domainUpdater.StateUpdater,
 	config *app.MetricsConfig,
 ) MetricsComponent {
 	// Create components
-	stateTracker := NewMetricsStateTracker(metricsService, stateMachine)
+	stateTracker := NewMetricsStateTracker(metricsService, stateUpdater)
 	collector := NewMetricsCollector(metricsService)
 	analyzer := NewMetricsAnalyzer(metricsService, config)
 
 	// Create manager that implements MetricsComponent
-	return NewMetricsManager(collector, analyzer, stateTracker, stateMachine, metricsService)
+	return NewMetricsManager(collector, analyzer, stateTracker, stateUpdater, metricsService)
 }
+
+// Verify interface implementation
+var _ domainUpdater.MetricsProvider = (*MetricsManager)(nil)

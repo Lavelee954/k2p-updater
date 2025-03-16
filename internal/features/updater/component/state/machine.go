@@ -44,8 +44,9 @@ func NewStateMachine(
 
 // HandleEvent processes an event and performs the appropriate state transition
 func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event models.Event, data map[string]interface{}) error {
-	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("context error before handling event: %w", err)
+	// Check for context cancellation first
+	if err := common.HandleContextError(ctx, "handle state event"); err != nil {
+		return err
 	}
 
 	log.Printf("STATE MACHINE: Handling event %s for node %s", event, nodeName)
@@ -71,9 +72,9 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 	newStatus, err := sm.eventDispatcher.DispatchEvent(ctx, currentStatus, event, data)
 	if err != nil {
 		if common.IsContextCanceled(err) {
-			return fmt.Errorf("context canceled during event handling: %w", err)
+			return common.HandleError(err, "context canceled during event handling")
 		}
-		return fmt.Errorf("error dispatching event: %w", err)
+		return common.HandleError(err, "error dispatching event")
 	}
 
 	// Check if state has changed

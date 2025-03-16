@@ -2,13 +2,13 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"strings"
 	"sync"
 	"time"
 
+	"k2p-updater/internal/common"
 	"k2p-updater/internal/features/updater/domain/interfaces"
 	"k2p-updater/internal/features/updater/domain/models"
 )
@@ -60,14 +60,14 @@ func NewUpdaterService(
 	}
 }
 
-// Start begins the updater service processing
+// Start initializes and starts the updater service
 func (s *UpdaterService) Start(ctx context.Context) error {
 	var startErr error
 
 	s.startOnce.Do(func() {
 		// Check for context cancellation at the beginning
-		if ctx.Err() != nil {
-			startErr = ctx.Err()
+		if err := common.HandleContextError(ctx, "start updater service"); err != nil {
+			startErr = err
 			return
 		}
 
@@ -78,11 +78,11 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 
 		// Discover control plane nodes
 		if err := s.discoverNodes(ctx); err != nil {
-			if errors.Is(err, context.Canceled) {
-				startErr = ctx.Err()
+			if common.IsContextCanceled(err) {
+				startErr = common.HandleError(err, "")
 				return
 			}
-			startErr = fmt.Errorf("failed to discover nodes: %w", err)
+			startErr = common.HandleError(err, "failed to discover nodes")
 			return
 		}
 

@@ -210,6 +210,11 @@ func (c *Client) handleStatusResponse(resp *http.Response, completed *bool) erro
 
 // executeWithRetry executes an operation with retry logic
 func (c *Client) executeWithRetry(ctx context.Context, operation backoff.Operation, operationName, nodeName string) error {
+	// Check context first
+	if err := common.HandleContextError(ctx, operationName); err != nil {
+		return err
+	}
+
 	// Create exponential backoff
 	expBackoff := backoff.NewExponentialBackOff()
 	expBackoff.MaxElapsedTime = 30 * time.Second
@@ -220,7 +225,7 @@ func (c *Client) executeWithRetry(ctx context.Context, operation backoff.Operati
 		expBackoff,
 		func(err error, duration time.Duration) {
 			// Skip logging for context cancellation
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if common.IsContextCanceled(err) {
 				log.Printf("Not retrying %s for node %s due to context cancellation: %v",
 					operationName, nodeName, err)
 				return
@@ -233,16 +238,16 @@ func (c *Client) executeWithRetry(ctx context.Context, operation backoff.Operati
 
 	// Handle the result
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if common.IsContextCanceled(err) {
 			log.Printf("%s for node %s canceled due to context: %v", operationName, nodeName, err)
-			return err
+			return common.HandleError(err, "%s for node %s canceled", operationName, nodeName)
 		}
 		c.recordFailure()
-	} else {
-		c.recordSuccess()
+		return common.HandleError(err, "%s for node %s failed", operationName, nodeName)
 	}
 
-	return err
+	c.recordSuccess()
+	return nil
 }
 
 // isCircuitOpen checks if the circuit breaker is open

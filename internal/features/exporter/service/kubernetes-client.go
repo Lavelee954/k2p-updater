@@ -2,9 +2,9 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
+	"k2p-updater/internal/common"
 	"k2p-updater/internal/features/exporter/domain"
 
 	v1 "k8s.io/api/core/v1"
@@ -32,18 +32,18 @@ func (k *kubernetesClient) CoreV1() typedcorev1.CoreV1Interface {
 // GetPods retrieves pods matching specific namespace and label selector
 func (k *kubernetesClient) GetPods(ctx context.Context, namespace, labelSelector string) ([]v1.Pod, error) {
 	// Check for context cancellation first
-	if ctx.Err() != nil {
-		return nil, fmt.Errorf("context canceled before getting pods: %w", ctx.Err())
+	if err := common.HandleContextError(ctx, "get pods"); err != nil {
+		return nil, err
 	}
 
 	pods, err := k.coreClient.Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
 	})
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("context canceled during pod list operation: %w", err)
+		if common.IsContextCanceled(err) {
+			return nil, common.HandleError(err, "context canceled during pod list operation")
 		}
-		return nil, fmt.Errorf("failed to list pods: %w", err)
+		return nil, common.HandleError(err, "failed to list pods")
 	}
 	return pods.Items, nil
 }
@@ -51,16 +51,16 @@ func (k *kubernetesClient) GetPods(ctx context.Context, namespace, labelSelector
 // GetNode retrieves information about a specific node
 func (k *kubernetesClient) GetNode(ctx context.Context, name string) (*v1.Node, error) {
 	// Check for context cancellation first
-	if ctx.Err() != nil {
-		return nil, fmt.Errorf("context canceled before getting node: %w", ctx.Err())
+	if err := common.HandleContextError(ctx, "get node"); err != nil {
+		return nil, err
 	}
 
 	node, err := k.coreClient.Nodes().Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("context canceled during node retrieval: %w", err)
+		if common.IsContextCanceled(err) {
+			return nil, common.HandleError(err, "context canceled during node retrieval")
 		}
-		return nil, err
+		return nil, common.HandleError(err, "failed to get node %s", name)
 	}
 	return node, nil
 }
@@ -68,8 +68,8 @@ func (k *kubernetesClient) GetNode(ctx context.Context, name string) (*v1.Node, 
 // ListPodsInNode lists all pods running on a specific node
 func (k *kubernetesClient) ListPodsInNode(ctx context.Context, nodeName string) ([]v1.Pod, error) {
 	// Check for context cancellation first
-	if ctx.Err() != nil {
-		return nil, fmt.Errorf("context canceled before listing pods on node: %w", ctx.Err())
+	if err := common.HandleContextError(ctx, "list pods in node"); err != nil {
+		return nil, err
 	}
 
 	fieldSelector := fmt.Sprintf("spec.nodeName=%s", nodeName)
@@ -77,10 +77,10 @@ func (k *kubernetesClient) ListPodsInNode(ctx context.Context, nodeName string) 
 		FieldSelector: fieldSelector,
 	})
 	if err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return nil, fmt.Errorf("context canceled during listing pods on node: %w", err)
+		if common.IsContextCanceled(err) {
+			return nil, common.HandleError(err, "context canceled during listing pods on node")
 		}
-		return nil, fmt.Errorf("failed to list pods on node %s: %w", nodeName, err)
+		return nil, common.HandleError(err, "failed to list pods on node %s", nodeName)
 	}
 	return pods.Items, nil
 }

@@ -15,7 +15,7 @@ import (
 
 	"k2p-updater/cmd/app"
 	domainExporter "k2p-updater/internal/features/exporter/domain"
-	domainMetric "k2p-updater/internal/features/metric/domain"
+	"k2p-updater/internal/features/metric/domain"
 	"k2p-updater/internal/features/updater/domain/interfaces"
 	"k2p-updater/internal/features/updater/domain/models"
 	"k2p-updater/internal/features/updater/service"
@@ -29,7 +29,7 @@ type ComponentFactory interface {
 	CreateBackendClient(config *app.BackendConfig) interfaces.BackendClient
 	CreateHealthVerifier(exporterService domainExporter.Provider) interfaces.HealthVerifier
 	CreateStateMachine(resourceFactory *resource.Factory) interfaces.StateMachine
-	CreateMetricsComponent(metricsService domainMetric.Provider, stateMachine interfaces.StateMachine, config *app.MetricsConfig) interfaces.MetricsProvider
+	CreateMetricsComponent(metricsService domain.Provider, stateMachine interfaces.StateMachine, config *app.MetricsConfig) interfaces.MetricsProvider
 	CreateNodeDiscoverer(kubeClient kubernetes.Interface, namespace string) interfaces.NodeDiscoverer
 	CreateCoordinator(stateMachine interfaces.StateMachine) interfaces.Coordinator
 	CreateRecoveryManager(stateMachine interfaces.StateMachine) interfaces.RecoveryManager
@@ -61,7 +61,7 @@ func (f *DefaultComponentFactory) CreateStateMachine(resourceFactory *resource.F
 }
 
 // CreateMetricsComponent creates a new metrics component
-func (f *DefaultComponentFactory) CreateMetricsComponent(metricsService domainMetric.Provider, stateMachine interfaces.StateMachine, config *app.MetricsConfig) interfaces.MetricsProvider {
+func (f *DefaultComponentFactory) CreateMetricsComponent(metricsService domain.Provider, stateMachine interfaces.StateMachine, config *app.MetricsConfig) interfaces.MetricsProvider {
 	return metrics.NewMetricsComponent(metricsService, stateMachine, config)
 }
 
@@ -89,7 +89,7 @@ func (f *DefaultComponentFactory) CreateResourceFactoryAdapter(resourceFactory *
 func NewProvider(
 	ctx context.Context,
 	config *app.Config,
-	metricsService domainMetric.Provider,
+	metricsService domain.Provider,
 	exporterService domainExporter.Provider,
 	resourceFactory *resource.Factory,
 	kubeClient kubernetes.Interface,

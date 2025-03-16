@@ -297,7 +297,7 @@ func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, sta
 	// Convert domain status to CRD-compatible format
 	statusData := map[string]interface{}{
 		"controlPlaneNodeName": nodeName,
-		"cpuWinUsage":          status.WindowAverageUtilization,
+		"cpuWinUsage":          fmt.Sprintf("%.1f", status.WindowAverageUtilization),
 		"coolDown":             status.CurrentState == domain.StateCoolDown,
 		//"updateStatus":         string(status.CurrentState),
 		"message":        status.Message,

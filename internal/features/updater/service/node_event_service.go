@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -219,7 +220,7 @@ func (s *NodeEventService) updateNodeStatusInCR(ctx context.Context, nodeName st
 	// Directly update the CR status
 	statusData := map[string]interface{}{
 		"controlPlaneNodeName": nodeName,
-		"cpuWinUsage":          status.WindowAverageUtilization,
+		"cpuWinUsage":          fmt.Sprintf("%.1f", status.WindowAverageUtilization),
 		"coolDown":             status.CurrentState == domain.StateCoolDown,
 		//"updateStatus":         string(status.CurrentState),
 		"message":        status.Message,

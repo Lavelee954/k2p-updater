@@ -6,18 +6,24 @@ import (
 	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
 	"log"
+	"sync"
 	"time"
 )
 
 // monitoringHandler handles the Monitoring state
 type monitoringHandler struct {
 	resourceFactory *resource.Factory
+	lastEventTime   map[string]time.Time
+	eventMutex      sync.RWMutex
+	eventInterval   time.Duration // Minimum interval between events
 }
 
 // newMonitoringHandler creates a new handler for Monitoring state
 func newMonitoringHandler(resourceFactory *resource.Factory) domain.StateHandler {
 	return &monitoringHandler{
 		resourceFactory: resourceFactory,
+		lastEventTime:   make(map[string]time.Time),
+		eventInterval:   30 * time.Second, // Only create events every 30 seconds at most
 	}
 }
 
@@ -96,21 +102,32 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *domain.ControlPl
 			newStatus.CPUUtilization,
 			newStatus.WindowAverageUtilization)
 
-		// Record the event in CR message
-		h.resourceFactory.Event().NormalRecordWithNode(
-			ctx,
-			"updater",
-			status.NodeName,
-			string(domain.StatePendingVmSpecUp),
-			"Node %s CPU metrics: current %.2f%%, window avg %.2f%%",
-			status.NodeName,
-			newStatus.CPUUtilization,
-			newStatus.WindowAverageUtilization,
-		)
+		// Check if enough time has passed since the last event
+		h.eventMutex.RLock()
+		lastTime, exists := h.lastEventTime[status.NodeName]
+		h.eventMutex.RUnlock()
+
+		now := time.Now()
+		if !exists || now.Sub(lastTime) > h.eventInterval {
+			// Record the event in CR message
+			h.resourceFactory.Event().NormalRecordWithNode(
+				ctx,
+				"updater",
+				status.NodeName,
+				string(domain.StatePendingVmSpecUp),
+				"Node %s CPU metrics: current %.2f%%, window avg %.2f%%",
+				status.NodeName,
+				newStatus.CPUUtilization,
+				newStatus.WindowAverageUtilization,
+			)
+
+			// Update the last event time
+			h.eventMutex.Lock()
+			h.lastEventTime[status.NodeName] = now
+			h.eventMutex.Unlock()
+		}
 
 		return &newStatus, nil
-	default:
-		log.Printf("MONITORING HANDLER: Unhandled event %s for node %s, no state change", event, status.NodeName)
 	}
 
 	// Default: no state change

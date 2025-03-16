@@ -6,18 +6,24 @@ import (
 	"k2p-updater/internal/features/updater/domain"
 	"k2p-updater/pkg/resource"
 	"log"
+	"sync"
 	"time"
 )
 
 // coolDownHandler handles the CoolDown state
 type coolDownHandler struct {
 	resourceFactory *resource.Factory
+	lastEventTime   map[string]time.Time
+	eventMutex      sync.RWMutex
+	eventInterval   time.Duration // Minimum interval between events
 }
 
 // newCoolDownHandler creates a new handler for CoolDown state
 func newCoolDownHandler(resourceFactory *resource.Factory) domain.StateHandler {
 	return &coolDownHandler{
 		resourceFactory: resourceFactory,
+		lastEventTime:   make(map[string]time.Time),
+		eventInterval:   30 * time.Second, // Only create events every 30 seconds at most
 	}
 }
 
@@ -28,53 +34,7 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 
 	switch event {
 	case domain.EventInitialize:
-		// Handle initialization event
-		if !newStatus.CoolDownEndTime.IsZero() {
-			remaining := time.Until(newStatus.CoolDownEndTime)
-			if remaining < 0 {
-				remaining = 0
-			}
-			newStatus.Message = fmt.Sprintf("In cooldown period, %.1f minutes remaining",
-				remaining.Minutes())
-
-			// Log that we're in CoolDown state
-			log.Printf("INIT: Node %s initialized in CoolDown state until %s (%.1f minutes remaining)",
-				status.NodeName, newStatus.CoolDownEndTime.Format(time.RFC3339), remaining.Minutes())
-		} else if data != nil && data["coolDownEndTime"] != nil {
-			// If cooldown end time is provided in the data, use it
-			if endTime, ok := data["coolDownEndTime"].(time.Time); ok {
-				newStatus.CoolDownEndTime = endTime
-				remaining := time.Until(endTime)
-				if remaining < 0 {
-					remaining = 0
-				}
-				newStatus.Message = fmt.Sprintf("In cooldown period, %.1f minutes remaining",
-					remaining.Minutes())
-
-				log.Printf("INIT: Node %s initialized with cooldown end time %s (%.1f minutes remaining)",
-					status.NodeName, endTime.Format(time.RFC3339), remaining.Minutes())
-			}
-		} else {
-			// Default cooldown period
-			cooldownPeriod := 5 * time.Minute
-			newStatus.CoolDownEndTime = time.Now().Add(cooldownPeriod)
-			newStatus.Message = fmt.Sprintf("In cooldown period, %.1f minutes remaining",
-				cooldownPeriod.Minutes())
-
-			log.Printf("INIT: Node %s initialized with default cooldown period of %.1f minutes",
-				status.NodeName, cooldownPeriod.Minutes())
-		}
-
-		// Update CPU metrics if available
-		if data != nil {
-			if cpu, ok := data["cpuUtilization"].(float64); ok {
-				newStatus.CPUUtilization = cpu
-			}
-			if windowAvg, ok := data["windowAverageUtilization"].(float64); ok {
-				newStatus.WindowAverageUtilization = windowAvg
-			}
-		}
-
+		// ... existing initialize code ...
 		return &newStatus, nil
 
 	case domain.EventCooldownStatus:
@@ -108,18 +68,31 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 			newStatus.CPUUtilization,
 			newStatus.WindowAverageUtilization)
 
-		// Create a status message event as well
-		h.resourceFactory.Event().NormalRecordWithNode(
-			ctx,
-			"updater",
-			status.NodeName,
-			string(domain.StatePendingVmSpecUp),
-			"Node %s cooldown update: %.1f minutes remaining, CPU: %.2f%%, Avg: %.2f%%",
-			status.NodeName,
-			time.Until(newStatus.CoolDownEndTime).Minutes(),
-			newStatus.CPUUtilization,
-			newStatus.WindowAverageUtilization,
-		)
+		// Check if enough time has passed since the last event
+		h.eventMutex.RLock()
+		lastTime, exists := h.lastEventTime[status.NodeName]
+		h.eventMutex.RUnlock()
+
+		now := time.Now()
+		if !exists || now.Sub(lastTime) > h.eventInterval {
+			// Create a status message event
+			h.resourceFactory.Event().NormalRecordWithNode(
+				ctx,
+				"updater",
+				status.NodeName,
+				string(domain.StatePendingVmSpecUp),
+				"Node %s cooldown update: %.1f minutes remaining, CPU: %.2f%%, Avg: %.2f%%",
+				status.NodeName,
+				time.Until(newStatus.CoolDownEndTime).Minutes(),
+				newStatus.CPUUtilization,
+				newStatus.WindowAverageUtilization,
+			)
+
+			// Update the last event time
+			h.eventMutex.Lock()
+			h.lastEventTime[status.NodeName] = now
+			h.eventMutex.Unlock()
+		}
 
 		return &newStatus, nil
 

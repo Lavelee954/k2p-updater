@@ -230,6 +230,18 @@ func (s *Server) Shutdown() error {
 		s.updaterSvc.Stop()
 	}
 
+	// Stop the metrics service if it's running
+	if s.metricsSvc != nil {
+		log.Println("Stopping metrics service...")
+		s.metricsSvc.Stop()
+	}
+
+	// Stop the exporter service if it's running
+	if s.exporterSvc != nil {
+		log.Println("Stopping exporter service...")
+		s.exporterSvc.Stop()
+	}
+
 	log.Println("Application shutdown complete")
 	return nil
 }

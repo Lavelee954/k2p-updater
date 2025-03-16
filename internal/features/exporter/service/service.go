@@ -172,6 +172,8 @@ func (s *Service) runHealthCheck(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-s.stopChan:
+			return
 		case <-ticker.C:
 			s.checkAllExporters(ctx)
 		}
@@ -250,6 +252,8 @@ func (s *Service) processHealthChecks(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			return
+		case <-s.stopChan:
 			return
 		case nodeName := <-s.healthCheckChan:
 			s.verifyExporterHealth(ctx, nodeName)

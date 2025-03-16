@@ -11,12 +11,9 @@ import (
 type Provider interface {
 	ExporterManager
 	ExporterQuery
-
-	// Start begins the exporter service
-	Start(ctx context.Context) error
-
-	// WaitForInitialization waits for the service to be initialized
 	WaitForInitialization(ctx context.Context) error
+	Start(ctx context.Context) error
+	Stop()
 }
 
 // ExporterManager defines operations for managing exporters

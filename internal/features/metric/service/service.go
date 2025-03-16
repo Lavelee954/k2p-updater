@@ -25,10 +25,10 @@ type Service struct {
 	mu               sync.RWMutex
 	alertSubscribers []chan domainMetric.CPUAlert
 	alertMu          sync.RWMutex
-	// Components aligned with domain interfaces
-	fetcher    domainMetric.Fetcher
-	parser     domainMetric.Parser
-	calculator domainMetric.Calculator
+	fetcher          domainMetric.Fetcher
+	parser           domainMetric.Parser
+	calculator       domainMetric.Calculator
+	cancelFunc       context.CancelFunc
 }
 
 // NewMetricsService creates a new metrics service.
@@ -389,4 +389,27 @@ func (s *Service) RegisterNode(ctx context.Context, nodeName string) error {
 	}
 
 	return nil
+}
+
+// Stop terminates all goroutines and cleans up resources
+func (s *Service) Stop() {
+	if s.cancelFunc != nil {
+		log.Println("Stopping metrics service...")
+		s.cancelFunc()
+
+		// Close all alert subscriber channels
+		s.alertMu.Lock()
+		for _, ch := range s.alertSubscribers {
+			close(ch)
+		}
+		s.alertSubscribers = nil
+		s.alertMu.Unlock()
+
+		log.Println("Metrics service stopped")
+	}
+}
+
+// SetCancelFunc sets the context cancellation function for clean shutdown
+func (s *Service) SetCancelFunc(cancelFunc context.CancelFunc) {
+	s.cancelFunc = cancelFunc
 }

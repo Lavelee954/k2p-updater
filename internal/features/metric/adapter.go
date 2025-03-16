@@ -44,12 +44,15 @@ func NewProvider(
 		return nil, fmt.Errorf("failed to wait for exporter service initialization: %w", err)
 	}
 
-	// Start metrics collection in background with a fresh context that won't be canceled
-	// Note: This is a potential memory leak if the application doesn't properly shut down
-	// Consider adding a shutdown mechanism to clean up this goroutine
-	backgroundCtx := context.Background()
+	// Create a cancellable context for metrics collection
+	metricsCtx, cancelFunc := context.WithCancel(context.Background())
+
+	// Set the cancelFunc using the exported method
+	metricsService.SetCancelFunc(cancelFunc)
+
+	// Start metrics collection in background
 	go func() {
-		if err := metricsService.Start(backgroundCtx); err != nil {
+		if err := metricsService.Start(metricsCtx); err != nil {
 			log.Printf("Error starting metrics service: %v", err)
 		}
 	}()

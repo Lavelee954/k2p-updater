@@ -10,9 +10,8 @@ type Provider interface {
 	NodeMetricsCollector
 	MetricsAnalyzer
 	AlertNotifier
-
-	// Start begins metrics collection for all nodes
 	Start(ctx context.Context) error
+	Stop()
 }
 
 // NodeMetricsCollector collects node metrics

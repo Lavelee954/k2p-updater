@@ -135,7 +135,7 @@ func (h *coolDownHandler) Handle(ctx context.Context, status *domain.ControlPlan
 			ctx,
 			"updater",
 			status.NodeName,
-			"StateTransition",
+			string(domain.StatePendingVmSpecUp),
 			"Node %s state changed from CoolDown to Monitoring, cooldown period completed",
 			status.NodeName,
 		)

@@ -95,7 +95,7 @@ func (h *monitoringHandler) Handle(ctx context.Context, status *domain.ControlPl
 				ctx,
 				"updater",
 				status.NodeName,
-				"PeriodicMonitoring",
+				string(domain.StatePendingVmSpecUp),
 				"Node %s periodic monitoring report (10min): CPU current %.2f%%, window avg %.2f%%",
 				status.NodeName,
 				newStatus.CPUUtilization,

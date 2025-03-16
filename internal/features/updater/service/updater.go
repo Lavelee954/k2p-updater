@@ -548,8 +548,8 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 	copy(nodesToUpdate, s.nodes)
 	s.nodesMutex.RUnlock()
 
-	// Check if any node is currently being spec'd up
-	isSpecingUp, specingUpNode, err := s.coordinator.IsAnyNodeSpecingUp(ctx, nodesToUpdate)
+	// First, acquire all necessary information atomically
+	specingUp, specingUpNode, err := s.coordinator.IsAnyNodeSpecingUp(ctx, nodesToUpdate)
 	if err != nil {
 		if ctx.Err() != nil {
 			log.Printf("Context canceled during specUp check: %v", ctx.Err())
@@ -558,15 +558,20 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 		log.Printf("Failed to check ongoing spec up: %v", err)
 	}
 
+	// Process each node with the consistent information we retrieved
 	for _, nodeName := range nodesToUpdate {
+		// Create a local context that can be canceled independently for this node
+		nodeCtx, cancelNode := context.WithCancel(ctx)
+		defer cancelNode() // Ensure this is called when we exit
+
 		// Check for context cancellation during iteration
-		if ctx.Err() != nil {
-			log.Printf("Context canceled during node metrics update: %v", ctx.Err())
+		if nodeCtx.Err() != nil {
+			log.Printf("Context canceled during node metrics update: %v", nodeCtx.Err())
 			return
 		}
 
 		// Get current state
-		state, err := s.stateMachine.GetCurrentState(ctx, nodeName)
+		state, err := s.stateMachine.GetCurrentState(nodeCtx, nodeName)
 		if err != nil {
 			log.Printf("Failed to get state for node %s: %v", nodeName, err)
 			continue
@@ -574,7 +579,7 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 
 		// For nodes in monitoring state, check CPU threshold
 		if state == models.StateMonitoring {
-			thresholdExceeded, currentCPU, windowAvg, err := s.metricsComponent.CheckCPUThresholdExceeded(ctx, nodeName)
+			thresholdExceeded, currentCPU, windowAvg, err := s.metricsComponent.CheckCPUThresholdExceeded(nodeCtx, nodeName)
 			if err != nil {
 				log.Printf("Failed to check CPU threshold for node %s: %v", nodeName, err)
 				continue
@@ -586,37 +591,53 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 				"windowAverageUtilization": windowAvg,
 			}
 
-			// If threshold exceeded and no other node is spec'ing up, trigger an event
-			if thresholdExceeded && !isSpecingUp {
-				if ctx.Err() != nil {
-					log.Printf("Context canceled before handling threshold event: %v", ctx.Err())
+			// Using the atomic check result from earlier
+			if thresholdExceeded && !specingUp {
+				if nodeCtx.Err() != nil {
+					log.Printf("Context canceled before handling threshold event: %v", nodeCtx.Err())
 					return
 				}
-				if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventThresholdExceeded, data); err != nil {
-					log.Printf("Failed to handle threshold exceeded event: %v", err)
+
+				// Try to transition to spec-up state
+				// First, double check if any node started a spec-up since our earlier check
+				currentSpecingUp, currentSpecingNode, checkErr := s.coordinator.IsAnyNodeSpecingUp(nodeCtx, nodesToUpdate)
+				if checkErr != nil {
+					log.Printf("Failed to perform final spec-up check: %v", checkErr)
+					continue
+				}
+
+				if !currentSpecingUp {
+					// Still no node spec'ing up, we can proceed
+					if err := s.stateMachine.HandleEvent(nodeCtx, nodeName, models.EventThresholdExceeded, data); err != nil {
+						log.Printf("Failed to handle threshold exceeded event: %v", err)
+					} else {
+						log.Printf("Node %s triggered for spec up (CPU: %.2f%%)", nodeName, windowAvg)
+						// Update local tracking to prevent multiple nodes from being triggered
+						specingUp = true
+						specingUpNode = nodeName
+					}
 				} else {
-					log.Printf("Node %s triggered for spec up (CPU: %.2f%%)", nodeName, windowAvg)
-					isSpecingUp = true
-					specingUpNode = nodeName
+					log.Printf("Node %s threshold exceeded but another node (%s) started spec-up during processing",
+						nodeName, currentSpecingNode)
 				}
 			} else if thresholdExceeded {
 				log.Printf("Node %s exceeded threshold (%.2f%%) but waiting for %s to complete",
 					nodeName, windowAvg, specingUpNode)
 				// Just update the metrics
-				if ctx.Err() != nil {
-					log.Printf("Context canceled before updating metrics: %v", ctx.Err())
+				if nodeCtx.Err() != nil {
+					log.Printf("Context canceled before updating metrics: %v", nodeCtx.Err())
 					return
 				}
-				if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventInitialize, data); err != nil {
+				if err := s.stateMachine.HandleEvent(nodeCtx, nodeName, models.EventInitialize, data); err != nil {
 					log.Printf("Failed to update metrics: %v", err)
 				}
 			} else {
 				// Just update the metrics
-				if ctx.Err() != nil {
-					log.Printf("Context canceled before updating metrics: %v", ctx.Err())
+				if nodeCtx.Err() != nil {
+					log.Printf("Context canceled before updating metrics: %v", nodeCtx.Err())
 					return
 				}
-				if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventInitialize, data); err != nil {
+				if err := s.stateMachine.HandleEvent(nodeCtx, nodeName, models.EventInitialize, data); err != nil {
 					log.Printf("Failed to update metrics: %v", err)
 				}
 			}
@@ -629,11 +650,11 @@ func (s *UpdaterService) updateAllNodeMetrics(ctx context.Context) {
 				"windowAverageUtilization": windowAvg,
 			}
 
-			if ctx.Err() != nil {
-				log.Printf("Context canceled before updating metrics: %v", ctx.Err())
+			if nodeCtx.Err() != nil {
+				log.Printf("Context canceled before updating metrics: %v", nodeCtx.Err())
 				return
 			}
-			if err := s.stateMachine.HandleEvent(ctx, nodeName, models.EventInitialize, data); err != nil {
+			if err := s.stateMachine.HandleEvent(nodeCtx, nodeName, models.EventInitialize, data); err != nil {
 				log.Printf("Failed to update metrics: %v", err)
 			}
 		}

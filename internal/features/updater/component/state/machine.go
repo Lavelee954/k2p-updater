@@ -75,163 +75,31 @@ func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event 
 
 	// Log at the beginning of event handling
 	log.Printf("STATE MACHINE: Handling event %s for node %s", event, nodeName)
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
 
-	// Get or initialize node status
-	status, exists := sm.statusMap[nodeName]
-	if !exists {
-		// Check if an initial state was provided in the data
-		initialState := models.StatePendingVmSpecUp
-		if data != nil {
-			if state, ok := data["initialState"].(models.State); ok && state != "" {
-				initialState = state
-				log.Printf("DEBUG: Using provided initial state %s for node %s", initialState, nodeName)
-			}
-		}
-
-		// Initialize with the determined state
-		status = &models.ControlPlaneStatus{
-			NodeName:           nodeName,
-			CurrentState:       initialState,
-			LastTransitionTime: time.Now(),
-			Message:            fmt.Sprintf("Initializing in %s state", initialState),
-		}
-		sm.statusMap[nodeName] = status
-		log.Printf("DEBUG: Initializing new node %s in state %s", nodeName, status.CurrentState)
+	// First create a transaction object to hold the entire state transition
+	transaction := &stateTransaction{
+		nodeName:      nodeName,
+		event:         event,
+		data:          data,
+		initialState:  "",
+		targetState:   "",
+		currentStatus: nil,
+		newStatus:     nil,
+		executed:      false,
 	}
 
-	// Check for context cancellation again before proceeding
-	if ctx.Err() != nil {
-		return ctx.Err()
+	// Prepare the transaction (read current state, determine new state)
+	if err := sm.prepareTransaction(ctx, transaction); err != nil {
+		return fmt.Errorf("failed to prepare transaction: %w", err)
 	}
 
-	// Record original state for metrics and logging
-	originalState := status.CurrentState
-	log.Printf("STATE MACHINE: Current state before handling event: %s", originalState)
-
-	// Get current state handler
-	handler, exists := sm.stateHandlers[status.CurrentState]
-	if !exists {
-		log.Printf("ERROR: No handler found for state %s", status.CurrentState)
-		return fmt.Errorf("no handler found for state %s", status.CurrentState)
+	// No state change needed, just update data
+	if transaction.initialState == transaction.targetState {
+		return sm.executeSimpleUpdate(ctx, transaction)
 	}
 
-	// Handle the event
-	log.Printf("DEBUG: Calling handle for node %s in state %s with event %s",
-		nodeName, status.CurrentState, event)
-	newStatus, err := handler.Handle(ctx, status, event, data)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			log.Printf("Context canceled during event handling: %v", err)
-			return err
-		}
-		log.Printf("ERROR: Handler error for node %s: %v", nodeName, err)
-		return fmt.Errorf("error handling event %s in state %s: %w", event, status.CurrentState, err)
-	}
-
-	// Check for context cancellation after handling
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	// Log the potential new state
-	log.Printf("DEBUG: After handler.Handle, potential new state is: %s (was %s)",
-		newStatus.CurrentState, status.CurrentState)
-
-	// If state has changed, perform transition
-	if newStatus.CurrentState != status.CurrentState {
-		log.Printf("STATE TRANSITION: Node %s: %s -> %s triggered by event %s",
-			nodeName, status.CurrentState, newStatus.CurrentState, event)
-
-		// Call exit handler for the current state
-		exitHandler := sm.stateHandlers[status.CurrentState]
-		if exitHandler != nil {
-			log.Printf("DEBUG: Calling OnExit for node %s state %s",
-				nodeName, status.CurrentState)
-			if _, err := exitHandler.OnExit(ctx, status); err != nil {
-				if errors.Is(err, context.Canceled) {
-					log.Printf("Context canceled during exit handler: %v", err)
-					return err
-				}
-				log.Printf("ERROR: Exit handler error for node %s: %v", nodeName, err)
-			}
-		}
-
-		// Check for context cancellation before entering new state
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		// Update timestamp and perform transition
-		newStatus.LastTransitionTime = time.Now()
-
-		// Call enter handler for the new state
-		enterHandler := sm.stateHandlers[newStatus.CurrentState]
-		if enterHandler != nil {
-			log.Printf("DEBUG: Calling OnEnter for node %s state %s",
-				nodeName, newStatus.CurrentState)
-			if updatedStatus, err := enterHandler.OnEnter(ctx, newStatus); err != nil {
-				if errors.Is(err, context.Canceled) {
-					log.Printf("Context canceled during enter handler: %v", err)
-					return err
-				}
-				log.Printf("ERROR: Enter handler error for node %s: %v", nodeName, err)
-			} else {
-				newStatus = updatedStatus
-			}
-		}
-	} else {
-		log.Printf("DEBUG: Node %s remains in state %s after event %s",
-			nodeName, status.CurrentState, event)
-	}
-
-	// Copy message from data if provided
-	if data != nil {
-		if message, ok := data["message"].(string); ok && message != "" {
-			newStatus.Message = message
-		}
-
-		// Copy cooldown end time if provided
-		if cooldownTime, ok := data["coolDownEndTime"].(time.Time); ok {
-			newStatus.CoolDownEndTime = cooldownTime
-		}
-
-		// Copy other status flags if provided
-		if requested, ok := data["specUpRequested"].(bool); ok {
-			newStatus.SpecUpRequested = requested
-		}
-
-		if completed, ok := data["specUpCompleted"].(bool); ok {
-			newStatus.SpecUpCompleted = completed
-		}
-
-		if healthCheck, ok := data["healthCheckPassed"].(bool); ok {
-			newStatus.HealthCheckPassed = healthCheck
-		}
-	}
-
-	// Check for context cancellation before updating status
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-
-	// Update status in map
-	sm.statusMap[nodeName] = newStatus
-	log.Printf("DEBUG: Final state after event handling: %s", newStatus.CurrentState)
-
-	// Update the custom resource status
-	if err := sm.updateCRStatus(ctx, nodeName, newStatus); err != nil {
-		if errors.Is(err, context.Canceled) {
-			log.Printf("Context canceled during CR status update: %v", err)
-			return err
-		}
-		log.Printf("ERROR: Failed to update CR status for node %s: %v", nodeName, err)
-	} else {
-		log.Printf("DEBUG: Successfully updated CR status for node %s", nodeName)
-	}
-
-	return nil
+	// Execute the full state transition as an atomic operation
+	return sm.executeStateTransition(ctx, transaction)
 }
 
 // GetStatus returns the current status for a node
@@ -306,4 +174,145 @@ func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, sta
 func createDefaultStateHandlers(resourceFactory *resource.Factory) map[models.State]interfaces.StateHandler {
 	// Just call the CreateStateHandlers function from factory.go
 	return CreateStateHandlers(resourceFactory)
+}
+
+// prepareTransaction reads current state and prepares the transaction
+func (sm *stateMachine) prepareTransaction(ctx context.Context, tx *stateTransaction) error {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	// Get or initialize node status
+	status, exists := sm.statusMap[tx.nodeName]
+	if !exists {
+		// Initialize with default state
+		initialState := models.StatePendingVmSpecUp
+		if tx.data != nil {
+			if state, ok := tx.data["initialState"].(models.State); ok && state != "" {
+				initialState = state
+			}
+		}
+
+		status = &models.ControlPlaneStatus{
+			NodeName:           tx.nodeName,
+			CurrentState:       initialState,
+			LastTransitionTime: time.Now(),
+			Message:            fmt.Sprintf("Initializing in %s state", initialState),
+		}
+	}
+
+	// Make a deep copy of the status
+	tx.currentStatus = &models.ControlPlaneStatus{}
+	*tx.currentStatus = *status
+
+	// Record initial state
+	tx.initialState = status.CurrentState
+
+	return nil
+}
+
+// executeSimpleUpdate handles updates that don't change state
+func (sm *stateMachine) executeSimpleUpdate(ctx context.Context, tx *stateTransaction) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// Get current state handler
+	handler, exists := sm.stateHandlers[tx.initialState]
+	if !exists {
+		return fmt.Errorf("no handler found for state %s", tx.initialState)
+	}
+
+	// Handle the event
+	newStatus, err := handler.Handle(ctx, tx.currentStatus, tx.event, tx.data)
+	if err != nil {
+		return err
+	}
+
+	// Update in memory and CR status
+	sm.statusMap[tx.nodeName] = newStatus
+	return sm.updateCRStatus(ctx, tx.nodeName, newStatus)
+}
+
+// executeStateTransition executes a full state transition atomically
+func (sm *stateMachine) executeStateTransition(ctx context.Context, tx *stateTransaction) error {
+	// Lock for the entire state transition to prevent race conditions
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// Check context cancellation again before proceeding
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// Verify current state hasn't changed since we prepared the transaction
+	currentStatus, exists := sm.statusMap[tx.nodeName]
+	if !exists || currentStatus.CurrentState != tx.initialState {
+		return fmt.Errorf("state changed since transaction preparation (was %s, now %s)",
+			tx.initialState, currentStatus.CurrentState)
+	}
+
+	// Get current state handler
+	fromHandler, exists := sm.stateHandlers[tx.initialState]
+	if !exists {
+		return fmt.Errorf("no handler found for initial state %s", tx.initialState)
+	}
+
+	// Handle the event to determine target state
+	newStatus, err := fromHandler.Handle(ctx, currentStatus, tx.event, tx.data)
+	if err != nil {
+		return fmt.Errorf("event handler error: %w", err)
+	}
+
+	// If state unchanged, just update and return
+	if newStatus.CurrentState == tx.initialState {
+		sm.statusMap[tx.nodeName] = newStatus
+		return sm.updateCRStatus(ctx, tx.nodeName, newStatus)
+	}
+
+	// We're changing state, call exit handler
+	if _, err := fromHandler.OnExit(ctx, currentStatus); err != nil {
+		return fmt.Errorf("exit handler error: %w", err)
+	}
+
+	// Call enter handler for new state
+	toHandler, exists := sm.stateHandlers[newStatus.CurrentState]
+	if !exists {
+		return fmt.Errorf("no handler found for target state %s", newStatus.CurrentState)
+	}
+
+	// Update transition time
+	newStatus.LastTransitionTime = time.Now()
+
+	// Call enter handler
+	finalStatus, err := toHandler.OnEnter(ctx, newStatus)
+	if err != nil {
+		// We're in an inconsistent state! Attempt to revert
+		log.Printf("ERROR: Enter handler failed, attempting to revert to previous state: %v", err)
+		revertStatus := currentStatus
+		revertStatus.Message = fmt.Sprintf("Failed to transition to %s: %v",
+			newStatus.CurrentState, err)
+
+		sm.statusMap[tx.nodeName] = revertStatus
+		sm.updateCRStatus(ctx, tx.nodeName, revertStatus)
+		return fmt.Errorf("enter handler error: %w", err)
+	}
+
+	// Update the status map and CR status
+	sm.statusMap[tx.nodeName] = finalStatus
+	return sm.updateCRStatus(ctx, tx.nodeName, finalStatus)
+}
+
+// New type for tracking state transitions
+type stateTransaction struct {
+	nodeName      string
+	event         models.Event
+	data          map[string]interface{}
+	initialState  models.State
+	targetState   models.State
+	currentStatus *models.ControlPlaneStatus
+	newStatus     *models.ControlPlaneStatus
+	executed      bool
 }

@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// CoordinationManager handles coordination between control plane nodes
-type CoordinationManager struct {
+// Manager CoordinationManager handles coordination between control plane nodes
+type Manager struct {
 	stateMachine  interfaces.StateMachine
 	statusCache   map[string]models.State
 	lastUpdate    time.Time
@@ -22,7 +22,7 @@ type CoordinationManager struct {
 
 // NewCoordinationManager creates a new coordination manager
 func NewCoordinationManager(stateMachine interfaces.StateMachine) interfaces.Coordinator {
-	return &CoordinationManager{
+	return &Manager{
 		stateMachine:  stateMachine,
 		statusCache:   make(map[string]models.State),
 		cacheLifetime: 10 * time.Second,
@@ -30,54 +30,81 @@ func NewCoordinationManager(stateMachine interfaces.StateMachine) interfaces.Coo
 }
 
 // IsAnyNodeSpecingUp checks if any node is currently being spec'd up
-func (c *CoordinationManager) IsAnyNodeSpecingUp(ctx context.Context, nodes []string) (bool, string, error) {
+func (c *Manager) IsAnyNodeSpecingUp(ctx context.Context, nodes []string) (bool, string, error) {
 	if err := errorhandling.HandleContextError(ctx, "checking nodes spec status"); err != nil {
 		return false, "", err
 	}
 
-	// Add debug logging
-	log.Printf("Checking if any of %d nodes is currently spec'ing up", len(nodes))
+	// Lock for the entire operation to prevent concurrent checks/updates
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	c.mu.RLock()
+	// Check if cache is still valid
 	if time.Since(c.lastUpdate) < c.cacheLifetime {
-		// Use cached data if recent
+		// Use cached data
 		for nodeName, state := range c.statusCache {
 			if state == models.StateInProgressVmSpecUp {
-				c.mu.RUnlock()
 				log.Printf("Found node %s in InProgressVmSpecUp state (cached)", nodeName)
 				return true, nodeName, nil
 			}
 		}
-		c.mu.RUnlock()
 		log.Printf("No nodes currently spec'ing up (cached data)")
 		return false, "", nil
 	}
-	c.mu.RUnlock()
 
-	// Cache is stale, refresh it
-	// We can't use CheckContextAndExecute here because we need to return multiple values
-	if err := errorhandling.HandleContextError(ctx, "refreshing node status"); err != nil {
-		return false, "", err
-	}
+	// Cache is stale, need to refresh
+	newCache := make(map[string]models.State)
+	log.Printf("Refreshing state cache for %d nodes", len(nodes))
 
-	result, node, err := c.refreshAndCheck(ctx, nodes)
-	if err != nil {
-		if errorhandling.IsContextCanceled(err) {
-			log.Printf("Context canceled during spec up check")
+	// Check all nodes atomically
+	for _, nodeName := range nodes {
+		if err := errorhandling.HandleContextError(ctx, "checking node status"); err != nil {
 			return false, "", err
 		}
-		log.Printf("Error checking nodes status: %v", err)
-	} else if result {
-		log.Printf("Found node %s in InProgressVmSpecUp state (refreshed)", node)
-	} else {
-		log.Printf("No nodes currently spec'ing up (refreshed data)")
+
+		state, err := c.stateMachine.GetCurrentState(ctx, nodeName)
+		if err != nil {
+			if errorhandling.IsContextCanceled(err) {
+				return false, "", errorhandling.WrapError(err, "context canceled during node status check")
+			}
+
+			log.Printf("Warning: Failed to get state for node %s: %v", nodeName, err)
+
+			// Use cached state if available
+			if prevState, exists := c.statusCache[nodeName]; exists {
+				newCache[nodeName] = prevState
+				if prevState == models.StateInProgressVmSpecUp {
+					// Update cache and return result
+					c.statusCache = newCache
+					c.lastUpdate = time.Now()
+					log.Printf("Using cached state: node %s is in InProgressVmSpecUp", nodeName)
+					return true, nodeName, nil
+				}
+			}
+			continue
+		}
+
+		// Store state in cache
+		newCache[nodeName] = state
+
+		// If this node is currently being spec'd up, return immediately
+		if state == models.StateInProgressVmSpecUp {
+			// Update cache and return result
+			c.statusCache = newCache
+			c.lastUpdate = time.Now()
+			log.Printf("Node %s is currently in InProgressVmSpecUp state", nodeName)
+			return true, nodeName, nil
+		}
 	}
 
-	return result, node, err
+	// No node is being spec'd up
+	c.statusCache = newCache
+	c.lastUpdate = time.Now()
+	return false, "", nil
 }
 
 // refreshAndCheck refreshes the state cache and checks for spec up
-func (c *CoordinationManager) refreshAndCheck(ctx context.Context, nodes []string) (bool, string, error) {
+func (c *Manager) refreshAndCheck(ctx context.Context, nodes []string) (bool, string, error) {
 	if err := errorhandling.HandleContextError(ctx, "refreshing node cache"); err != nil {
 		return false, "", err
 	}
@@ -140,7 +167,7 @@ func (c *CoordinationManager) refreshAndCheck(ctx context.Context, nodes []strin
 }
 
 // NextEligibleNode finds the next node eligible for spec up
-func (c *CoordinationManager) NextEligibleNode(ctx context.Context, nodes []string) (string, error) {
+func (c *Manager) NextEligibleNode(ctx context.Context, nodes []string) (string, error) {
 	// Check if any node is already spec'ing up
 	isSpecingUp, specingUpNode, err := c.IsAnyNodeSpecingUp(ctx, nodes)
 	if err != nil {

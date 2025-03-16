@@ -215,3 +215,11 @@ func NewInsufficientDataError(message string, provided, required int) error {
 		Required: required,
 	}
 }
+
+// NewMetricsUnavailableError creates a new error indicating metrics are unavailable for the given node.
+func NewMetricsUnavailableError(nodeName string, reason string) error {
+	return ErrMetricsUnavailable{
+		NodeName: nodeName,
+		Reason:   reason,
+	}
+}

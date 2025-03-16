@@ -34,6 +34,9 @@ type StateHandler interface {
 
 	// OnExit is called when exiting this state
 	OnExit(ctx context.Context, status *models.ControlPlaneStatus) (*models.ControlPlaneStatus, error)
+
+	// SupportedEvents returns the list of events supported by this state
+	SupportedEvents() []models.Event
 }
 
 // StateUpdater defines an abstraction for updating node states

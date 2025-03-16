@@ -22,11 +22,11 @@ type stateMachine struct {
 	// stateHandlers maps states to their handlers
 	stateHandlers map[models.State]interfaces.StateHandler
 
+	// eventDispatcher handles events according to the transition matrix
+	eventDispatcher *EventDispatcher
+
 	// resourceFactory is used to update the custom resource status
 	resourceFactory *resource.Factory
-
-	// updateQueue manages the queued operations
-	updateQueue *queue.UpdateQueue
 
 	// mu protects concurrent access to the status map
 	mu sync.RWMutex
@@ -40,24 +40,12 @@ func NewStateMachine(
 	// Create state machine instance
 	sm := &stateMachine{
 		statusMap:       make(map[string]*models.ControlPlaneStatus),
-		stateHandlers:   make(map[models.State]interfaces.StateHandler),
+		stateHandlers:   stateHandlers,
 		resourceFactory: resourceFactory,
 	}
 
-	// Use provided handlers if available, otherwise create defaults
-	if stateHandlers != nil && len(stateHandlers) > 0 {
-		for state, handler := range stateHandlers {
-			sm.stateHandlers[state] = handler
-		}
-	} else {
-		// Register default state handlers
-		sm.stateHandlers = createDefaultStateHandlers(resourceFactory)
-	}
-
-	// Initialize the update queue *after* the state machine is fully defined
-	// We need to defer this initialization to avoid the circular dependency
-	// because the processor requires a fully initialized state machine
-	sm.initUpdateQueue()
+	// Create event dispatcher with transition matrix
+	sm.eventDispatcher = NewEventDispatcher(stateHandlers)
 
 	return sm
 }
@@ -79,40 +67,106 @@ type nodeProcessorAdapter struct {
 	sm *stateMachine
 }
 
-// HandleEvent processes an event and transitions to the next state if needed
+// HandleEvent processes an event and performs the appropriate state transition
 func (sm *stateMachine) HandleEvent(ctx context.Context, nodeName string, event models.Event, data map[string]interface{}) error {
-	// Check for context cancellation at the beginning
-	if ctx.Err() != nil {
-		return ctx.Err()
+	// Check context early
+	if err := common.CheckContextWithOp(ctx, "handling event"); err != nil {
+		return err
 	}
 
 	// Log at the beginning of event handling
 	log.Printf("STATE MACHINE: Handling event %s for node %s", event, nodeName)
 
-	// First create a transaction object to hold the entire state transition
-	transaction := &stateTransaction{
-		nodeName:      nodeName,
-		event:         event,
-		data:          data,
-		initialState:  "",
-		targetState:   "",
-		currentStatus: nil,
-		newStatus:     nil,
-		executed:      false,
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// Get current status
+	status, exists := sm.statusMap[nodeName]
+	if !exists {
+		// Initialize with default state if needed
+		initialState := models.StatePendingVmSpecUp
+		if data != nil {
+			if state, ok := data["initialState"].(models.State); ok && state != "" {
+				initialState = state
+			}
+		}
+
+		status = &models.ControlPlaneStatus{
+			NodeName:           nodeName,
+			CurrentState:       initialState,
+			LastTransitionTime: time.Now(),
+			Message:            fmt.Sprintf("Initializing in %s state", initialState),
+		}
+		sm.statusMap[nodeName] = status
 	}
 
-	// Prepare the transaction (read current state, determine new state)
-	if err := sm.prepareTransaction(ctx, transaction); err != nil {
-		return fmt.Errorf("failed to prepare transaction: %w", err)
+	// Make a copy of the status
+	currentStatus := &models.ControlPlaneStatus{}
+	*currentStatus = *status
+
+	// Record the initial state
+	initialState := currentStatus.CurrentState
+
+	// Dispatch the event
+	newStatus, err := sm.eventDispatcher.DispatchEvent(ctx, currentStatus, event, data)
+	if err != nil {
+		if common.IsContextCanceled(err) {
+			return fmt.Errorf("context canceled during event handling: %w", err)
+		}
+		return fmt.Errorf("error dispatching event: %w", err)
 	}
 
-	// No state change needed, just update data
-	if transaction.initialState == transaction.targetState {
-		return sm.executeSimpleUpdate(ctx, transaction)
+	// Check if state has changed
+	if newStatus.CurrentState != initialState {
+		// We need to perform a state transition with exit and enter handlers
+
+		// Call exit handler for current state
+		handler, exists := sm.stateHandlers[initialState]
+		if !exists {
+			return fmt.Errorf("no handler found for state %s", initialState)
+		}
+
+		if _, err := handler.OnExit(ctx, currentStatus); err != nil {
+			if common.IsContextCanceled(err) {
+				return fmt.Errorf("context canceled during exit handler: %w", err)
+			}
+			return fmt.Errorf("exit handler error: %w", err)
+		}
+
+		// Update transition time
+		newStatus.LastTransitionTime = time.Now()
+
+		// Call enter handler for new state
+		handler, exists = sm.stateHandlers[newStatus.CurrentState]
+		if !exists {
+			return fmt.Errorf("no handler found for target state %s", newStatus.CurrentState)
+		}
+
+		finalStatus, err := handler.OnEnter(ctx, newStatus)
+		if err != nil {
+			if common.IsContextCanceled(err) {
+				return fmt.Errorf("context canceled during enter handler: %w", err)
+			}
+
+			// We're in an inconsistent state! Log error and attempt to revert
+			log.Printf("ERROR: Enter handler failed, attempting to revert to previous state: %v", err)
+			revertStatus := currentStatus
+			revertStatus.Message = fmt.Sprintf("Failed to transition to %s: %v",
+				newStatus.CurrentState, err)
+
+			sm.statusMap[nodeName] = revertStatus
+			sm.updateCRStatus(ctx, nodeName, revertStatus)
+			return fmt.Errorf("enter handler error: %w", err)
+		}
+
+		// Update the status
+		sm.statusMap[nodeName] = finalStatus
+		return sm.updateCRStatus(ctx, nodeName, finalStatus)
 	}
 
-	// Execute the full state transition as an atomic operation
-	return sm.executeStateTransition(ctx, transaction)
+	// No state change, just update the status
+	sm.statusMap[nodeName] = newStatus
+	return sm.updateCRStatus(ctx, nodeName, newStatus)
 }
 
 // GetCurrentState returns the current state for a node
@@ -357,11 +411,6 @@ func (sm *stateMachine) executeStateTransition(ctx context.Context, tx *stateTra
 
 // updateCRStatus updates the control plane status in the custom resource
 func (sm *stateMachine) updateCRStatus(ctx context.Context, nodeName string, status *models.ControlPlaneStatus) error {
-	// Check context before updating CR status
-	if err := common.CheckContext(ctx); err != nil {
-		return fmt.Errorf("context error before updating CR status: %w", err)
-	}
-
 	// Convert domain status to CRD-compatible format
 	statusData := map[string]interface{}{
 		"controlPlaneNodeName": nodeName,

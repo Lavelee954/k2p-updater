@@ -3,6 +3,7 @@ package resource
 import (
 	"context"
 	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/dynamic"
@@ -92,6 +93,11 @@ func (f *Factory) Status() Status {
 
 // GetResource retrieves a resource by key and name
 func (f *Factory) GetResource(ctx context.Context, resourceKey, name string) (*unstructured.Unstructured, error) {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("context canceled before getting resource: %w", ctx.Err())
+	}
+
 	gvr, err := f.helpers.GetGVR(resourceKey)
 	if err != nil {
 		return nil, err
@@ -106,6 +112,11 @@ func (f *Factory) GetResource(ctx context.Context, resourceKey, name string) (*u
 
 // CreateResource creates a new custom resource
 func (f *Factory) CreateResource(ctx context.Context, resourceKey string, spec map[string]interface{}) error {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled before creating resource: %w", ctx.Err())
+	}
+
 	gvr, err := f.helpers.GetGVR(resourceKey)
 	if err != nil {
 		return err

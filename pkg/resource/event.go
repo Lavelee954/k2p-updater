@@ -3,11 +3,12 @@ package resource
 import (
 	"context"
 	"fmt"
+	"log"
+	"time"
+
 	"github.com/cenkalti/backoff/v4"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
-	"log"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,11 +36,20 @@ type EventInfo struct {
 
 // NormalRecord creates a normal event for the specified resource
 func (e EventInfo) NormalRecord(ctx context.Context, resourceKey, reason, message string, args ...interface{}) error {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled before recording normal event: %w", ctx.Err())
+	}
 	return e.normalRecordInternal(ctx, resourceKey, "", reason, message, args...)
 }
 
 // NormalRecordWithNode creates a normal event for the specified resource with a node name
 func (e EventInfo) normalRecordInternal(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled before recording internal normal event: %w", ctx.Err())
+	}
+
 	// Add backoff/retry logic
 	b := backoff.NewExponentialBackOff()
 	b.MaxElapsedTime = 15 * time.Second
@@ -48,6 +58,11 @@ func (e EventInfo) normalRecordInternal(ctx context.Context, resourceKey, nodeNa
 
 	// Operation to retry
 	operation := func() error {
+		// Check context cancellation before each attempt
+		if ctx.Err() != nil {
+			return backoff.Permanent(fmt.Errorf("context canceled during event creation: %w", ctx.Err()))
+		}
+
 		// Log input parameters
 		log.Printf("Creating normal event: resourceKey=%s, nodeName=%s, reason=%s", resourceKey, nodeName, reason)
 
@@ -140,23 +155,40 @@ func (e EventInfo) normalRecordInternal(ctx context.Context, resourceKey, nodeNa
 
 // WarningRecord creates a warning event for the specified resource
 func (e EventInfo) WarningRecord(ctx context.Context, resourceKey, reason, message string, args ...interface{}) error {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled before recording warning event: %w", ctx.Err())
+	}
 	return e.warningRecordInternal(ctx, resourceKey, "", reason, message, args...)
 }
 
 // NormalRecordWithNode method implementation
 func (e EventInfo) NormalRecordWithNode(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled before recording normal event with node: %w", ctx.Err())
+	}
 	return e.normalRecordInternal(ctx, resourceKey, nodeName, reason, message, args...)
 }
 
 // WarningRecordWithNode method implementation
 func (e EventInfo) WarningRecordWithNode(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled before recording warning event with node: %w", ctx.Err())
+	}
 	return e.warningRecordInternal(ctx, resourceKey, nodeName, reason, message, args...)
 }
 
 // warningRecordInternal implements the logic for creating warning events
 func (e EventInfo) warningRecordInternal(ctx context.Context, resourceKey, nodeName, reason, message string, args ...interface{}) error {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled before internal warning event recording: %w", ctx.Err())
+	}
+
 	// Log input parameters at the beginning
-	log.Printf("Creating normal event: resourceKey=%s, nodeName=%s, reason=%s", resourceKey, nodeName, reason)
+	log.Printf("Creating warning event: resourceKey=%s, nodeName=%s, reason=%s", resourceKey, nodeName, reason)
 
 	// 1. Get the information registered in the template by resourceKey
 	resource, exists := e.Template.Key[resourceKey]

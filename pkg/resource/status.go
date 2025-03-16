@@ -3,10 +3,11 @@ package resource
 import (
 	"context"
 	"fmt"
-	"github.com/cenkalti/backoff/v4"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"log"
 	"time"
+
+	"github.com/cenkalti/backoff/v4"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -27,6 +28,11 @@ type StatusInfo struct {
 }
 
 func (t StatusInfo) Create(ctx context.Context, resourceKey, message, status string) error {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled before creating status: %w", ctx.Err())
+	}
+
 	// 1. Extract ResourceName registered in a template by resourceKey
 	resource, exists := t.Template.Key[resourceKey]
 	if !exists {
@@ -72,6 +78,11 @@ func (t StatusInfo) Create(ctx context.Context, resourceKey, message, status str
 }
 
 func (t StatusInfo) Read(ctx context.Context, resourceKey, message, status string) error {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled before reading status: %w", ctx.Err())
+	}
+
 	// 1. Extract ResourceName registered in a template by resourceKey
 	resource, exists := t.Template.Key[resourceKey]
 	if !exists {
@@ -117,6 +128,11 @@ func (t StatusInfo) Read(ctx context.Context, resourceKey, message, status strin
 }
 
 func (t StatusInfo) Update(ctx context.Context, resourceKey, message, status string) error {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled before updating status: %w", ctx.Err())
+	}
+
 	// 1. Extract ResourceName registered in a template by resourceKey
 	resource, exists := t.Template.Key[resourceKey]
 	if !exists {
@@ -161,16 +177,29 @@ func (t StatusInfo) Update(ctx context.Context, resourceKey, message, status str
 
 // UpdateGeneric updates the status of a resource while preserving specific fields
 func (t StatusInfo) UpdateGeneric(ctx context.Context, resourceKey string, newStatusData interface{}) error {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled before updating generic status: %w", ctx.Err())
+	}
 	return t.updateGenericInternal(ctx, resourceKey, "", newStatusData)
 }
 
 // UpdateGenericWithNode updates the status using a specific node name for formatting
 func (t StatusInfo) UpdateGenericWithNode(ctx context.Context, resourceKey string, nodeName string, newStatusData interface{}) error {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled before updating generic status with node: %w", ctx.Err())
+	}
 	return t.updateGenericInternal(ctx, resourceKey, nodeName, newStatusData)
 }
 
 // updateGenericInternal implements the status update logic with nodeName handling
 func (t StatusInfo) updateGenericInternal(ctx context.Context, resourceKey string, nodeName string, newStatusData interface{}) error {
+	// Check for context cancellation first
+	if ctx.Err() != nil {
+		return fmt.Errorf("context canceled before internal generic status update: %w", ctx.Err())
+	}
+
 	// Logging to help with debugging
 	log.Printf("StatusInfo.updateGenericInternal called with resourceKey=%s, nodeName=%s",
 		resourceKey, nodeName)

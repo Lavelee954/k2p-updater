@@ -225,10 +225,14 @@ func (t StatusInfo) updateGenericInternal(ctx context.Context, resourceKey strin
 	// Log the incoming update data
 	statusDataMap, ok := newStatusData.(map[string]interface{})
 	if ok {
-		log.Printf("Status update data for node %s: CPU=%.2f%%, state=%s",
+		//log.Printf("Status update data for node %s: CPU=%.2f%%, state=%s",
+		//	nodeName,
+		//	statusDataMap["cpuWinUsage"],
+		//	statusDataMap["updateStatus"])
+
+		log.Printf("Status update data for node %s: CPU=%.2f%%",
 			nodeName,
-			statusDataMap["cpuWinUsage"],
-			statusDataMap["updateStatus"])
+			statusDataMap["cpuWinUsage"])
 	}
 
 	// For updater resource with the nested updates structure

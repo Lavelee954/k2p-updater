@@ -116,6 +116,55 @@ func (s *UpdaterService) Start(ctx context.Context) error {
 		// After node initialization
 		log.Println("Verifying resource configurations...")
 
+		// Add startup event
+		startupEvent := s.resourceFactory.Event().NormalRecordWithNode(
+			ctx,
+			"updater",
+			"master",
+			string(updaterDomain.StatePendingVmSpecUp),
+			"K2P-Updater service starting with %d control plane nodes configured",
+			len(s.nodes),
+		)
+
+		if startupEvent != nil {
+			log.Printf("Warning: Failed to record application startup event: %v", startupEvent)
+		} else {
+			log.Printf("Successfully recorded application startup event")
+		}
+
+		// After node initialization
+		log.Println("Verifying resource configurations...")
+
+		// Existing code continues...
+		// Get the list of nodes to monitor
+		if err := s.discoverNodes(ctx); err != nil {
+			if errors.Is(err, context.Canceled) {
+				startErr = ctx.Err()
+				return
+			}
+			startErr = fmt.Errorf("failed to discover nodes: %w", err)
+			return
+		}
+
+		// Emit another event after node discovery to report actual node count
+		if len(s.nodes) > 0 {
+			nodesDiscoveredEvent := s.resourceFactory.Event().NormalRecordWithNode(
+				ctx,
+				"updater",
+				"master",
+				string(updaterDomain.StatePendingVmSpecUp),
+				"Discovered %d control plane nodes: %s",
+				len(s.nodes),
+				strings.Join(s.nodes, ", "),
+			)
+
+			if nodesDiscoveredEvent != nil {
+				log.Printf("Warning: Failed to record nodes discovered event: %v", nodesDiscoveredEvent)
+			} else {
+				log.Printf("Successfully recorded nodes discovered event")
+			}
+		}
+
 		// Get the list of nodes to monitor
 		if err := s.discoverNodes(ctx); err != nil {
 			if errors.Is(err, context.Canceled) {
